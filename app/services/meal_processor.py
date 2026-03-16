@@ -18,12 +18,12 @@ from app.services.openai_service import (
 
 async def process_single_meal(meal: MealInput) -> PFCData:
     """単一の食事を処理してPFCを計算"""
-    if meal.has_image():
-        return await analyze_meal_from_image(
-            meal.image_base64, additional_info=meal.description or ""
-        )
-    elif meal.description:
+    if meal.description:
         return await analyze_meal_from_text(meal.description)
+    elif meal.has_image():
+        return await analyze_meal_from_image(
+            meal.image_base64, additional_info=""
+        )
     else:
         raise ValueError("食事の写真または説明が必要です")
 
