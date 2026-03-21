@@ -75,80 +75,35 @@ async def analyze_meal_from_image(image_base64: str, additional_info: str = "") 
     return PFCData(**result)
 
 
-CAPTION_TEMPLATE_WITH_PHOTO = """以下の情報からInstagram投稿用のキャプションを作成してください。
-
-PFC情報:
-- タンパク質: {protein}g
-- 脂質: {fat}g
-- 炭水化物: {carbs}g
-- カロリー: {calories}kcal
-
-AIコメント: {comment}
-
-以下の形式で、改行を含めて出力してください：
----
-（食事に関する一言、絵文字OK）
-
-P {protein} / F {fat} / C {carbs} / {calories} kcal
-
-AIコメント：{comment}
----
-
-最後にハッシュタグは含めないでください（別途追加します）。
-"""
-
-CAPTION_TEMPLATE_NO_PHOTO = """以下の情報からInstagram投稿用のキャプションを作成してください。
-写真が撮れなかった日用の投稿です。
+CAPTION_TEMPLATE = """以下の情報からInstagram投稿用のキャプションを1つだけ作成してください。
+重複する内容は絶対に含めないでください。
 
 食事内容: {description}
+P(タンパク質): {protein}g / F(脂質): {fat}g / C(炭水化物): {carbs}g / {calories}kcal
 
-PFC情報:
-- タンパク質: {protein}g
-- 脂質: {fat}g
-- 炭水化物: {carbs}g
-- カロリー: {calories}kcal
-
-AIコメント: {comment}
-
-以下の形式で、改行を含めて出力してください：
----
-今日は写真を撮れなかったので、AIで記録だけ残しました
-
-{description}
+以下の形式で出力してください（---は含めない）：
+食事に関する一言（絵文字OK、1行）
 
 P {protein} / F {fat} / C {carbs} / {calories} kcal
 
-AIコメント：{comment}
----
-
-最後にハッシュタグは含めないでください（別途追加します）。
+ハッシュタグは含めないでください。PFC数値は上記の1行だけにしてください。
 """
 
 
 async def generate_caption(pfc: PFCData, description: str = "", has_photo: bool = True) -> str:
     """Instagram用キャプションを生成"""
-    if has_photo:
-        prompt = CAPTION_TEMPLATE_WITH_PHOTO.format(
-            protein=pfc.protein,
-            fat=pfc.fat,
-            carbs=pfc.carbs,
-            calories=pfc.calories,
-            comment=pfc.comment,
-        )
-    else:
-        prompt = CAPTION_TEMPLATE_NO_PHOTO.format(
-            description=description,
-            protein=pfc.protein,
-            fat=pfc.fat,
-            carbs=pfc.carbs,
-            calories=pfc.calories,
-            comment=pfc.comment,
-        )
+    prompt = CAPTION_TEMPLATE.format(
+        description=description or "本日の食事",
+        protein=pfc.protein,
+        fat=pfc.fat,
+        carbs=pfc.carbs,
+        calories=pfc.calories,
+    )
 
     response = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=200,
     )
 
     caption = response.choices[0].message.content.strip()

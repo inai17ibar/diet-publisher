@@ -1,7 +1,9 @@
+import base64
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -180,3 +182,45 @@ async def get_daily_summary(
         )
         for row in rows
     ]
+
+
+class ImageUploadRequest(BaseModel):
+    """代表画像アップロードリクエスト"""
+
+    date: str
+    image_base64: str
+
+
+@router.post("/meal/upload-image")
+async def upload_daily_image(
+    req: ImageUploadRequest,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """1日の代表画像をアップロード（DALL-E生成画像の代わりに使用）"""
+    target_date = datetime.fromisoformat(req.date)
+
+    # Find meal logs for this date
+    query = select(MealLog).where(
+        func.date(MealLog.date) == target_date.date()
+    )
+    result = await session.execute(query)
+    logs = result.scalars().all()
+
+    if not logs:
+        raise HTTPException(status_code=404, detail="この日の食事記録が見つかりません")
+
+    # Save image
+    image_data = base64.b64decode(req.image_base64)
+    date_str = target_date.strftime("%Y%m%d")
+    image_filename = f"meal_{date_str}_custom.jpg"
+    image_path = settings.images_dir / image_filename
+    image_path.write_bytes(image_data)
+
+    # Update all logs for this date
+    for log in logs:
+        log.image_path = str(image_path)
+        log.mode = "photo"
+    await session.commit()
+
+    return {"success": True, "image_path": str(image_path)}

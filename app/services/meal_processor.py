@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import MealLog
-from app.models.schemas import DailyMealInput, MealInput, PFCData, PostResult
+from app.models.schemas import DailyMealInput, MealInput, MealPFCResult, PFCData, PostResult
 from app.services.instagram_service import instagram_service
 from app.services.openai_service import (
     analyze_meal_from_image,
@@ -28,11 +28,14 @@ async def process_single_meal(meal: MealInput) -> PFCData:
         raise ValueError("食事の写真または説明が必要です")
 
 
-async def process_daily_meals(daily_input: DailyMealInput) -> PFCData:
-    """1日分の食事を処理して合計PFCを計算"""
+async def process_daily_meals(
+    daily_input: DailyMealInput,
+) -> tuple[PFCData, list[MealPFCResult]]:
+    """1日分の食事を処理して合計PFCと個別PFCを計算"""
     # Simple mode: total_description only
     if daily_input.total_description:
-        return await analyze_meal_from_text(daily_input.total_description)
+        pfc = await analyze_meal_from_text(daily_input.total_description)
+        return pfc, []
 
     # Process each meal and sum up
     if not daily_input.meals:
@@ -40,6 +43,7 @@ async def process_daily_meals(daily_input: DailyMealInput) -> PFCData:
 
     total_pfc = PFCData(protein=0, fat=0, carbs=0, calories=0, comment="")
     comments = []
+    meal_details = []
 
     for meal in daily_input.meals:
         pfc = await process_single_meal(meal)
@@ -49,6 +53,13 @@ async def process_daily_meals(daily_input: DailyMealInput) -> PFCData:
         total_pfc.calories += pfc.calories
         if pfc.comment:
             comments.append(pfc.comment)
+        meal_details.append(
+            MealPFCResult(
+                meal_type=meal.meal_type,
+                description=meal.description,
+                pfc=pfc,
+            )
+        )
 
     # Round values
     total_pfc.protein = round(total_pfc.protein, 1)
@@ -60,7 +71,7 @@ async def process_daily_meals(daily_input: DailyMealInput) -> PFCData:
     if comments:
         total_pfc.comment = comments[-1]  # Use last comment
 
-    return total_pfc
+    return total_pfc, meal_details
 
 
 async def create_and_post(
@@ -72,7 +83,7 @@ async def create_and_post(
     has_photo = any(meal.has_image() for meal in daily_input.meals)
 
     # Calculate PFC
-    pfc = await process_daily_meals(daily_input)
+    pfc, meal_details = await process_daily_meals(daily_input)
 
     # Get description for caption
     if daily_input.total_description:
@@ -147,5 +158,6 @@ async def create_and_post(
         image_base64=image_base64,
         caption=caption,
         pfc=pfc,
+        meal_details=meal_details,
         error=error,
     )

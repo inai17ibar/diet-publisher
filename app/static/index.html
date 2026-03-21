@@ -618,6 +618,73 @@
             color: #999;
             font-size: 0.95rem;
         }
+
+        /* Per-meal PFC breakdown */
+        .meal-breakdown {
+            margin-bottom: 20px;
+        }
+
+        .meal-breakdown-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .meal-breakdown-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 6px;
+        }
+
+        .meal-breakdown-name {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #333;
+        }
+
+        .meal-breakdown-values {
+            display: flex;
+            gap: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .total-divider {
+            height: 2px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 1px;
+            margin: 12px 0 8px;
+        }
+
+        /* Custom image upload */
+        .custom-image-upload {
+            margin-top: 12px;
+        }
+
+        .custom-image-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px;
+            background: #f0f4ff;
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            cursor: pointer;
+            color: #667eea;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: background 0.3s;
+        }
+
+        .custom-image-label:hover {
+            background: #e0e8ff;
+        }
     </style>
 </head>
 <body>
@@ -714,6 +781,13 @@
 
             <!-- Result -->
             <div class="card result" id="resultCard">
+                <!-- Per-meal breakdown -->
+                <div class="meal-breakdown" id="mealBreakdown"></div>
+
+                <div class="total-divider"></div>
+
+                <!-- Daily totals -->
+                <div class="meal-breakdown-title">1日の合計</div>
                 <div class="pfc-grid">
                     <div class="pfc-item protein">
                         <div class="pfc-value" id="proteinValue">-</div>
@@ -740,7 +814,15 @@
 
                 <img class="generated-image" id="generatedImage" src="" alt="生成画像">
 
-                <label>📝 キャプション</label>
+                <!-- Custom image upload -->
+                <div class="custom-image-upload">
+                    <label class="custom-image-label" for="customImageInput">
+                        📷 自分の写真に差し替える
+                    </label>
+                    <input type="file" id="customImageInput" accept="image/*" style="display:none" onchange="uploadCustomImage()">
+                </div>
+
+                <label style="margin-top:16px">📝 キャプション</label>
                 <div class="caption-box" id="captionBox"></div>
 
                 <div class="action-buttons">
@@ -923,21 +1005,41 @@
         }
 
         function displayResult(data, meals) {
+            const icons = { breakfast: '🌅 朝ごはん', lunch: '☀️ 昼ごはん', dinner: '🌙 夜ごはん', snack: '🍪 間食' };
+
+            // Per-meal breakdown
+            const breakdownEl = document.getElementById('mealBreakdown');
+            if (data.meal_details && data.meal_details.length > 0) {
+                let html = '<div class="meal-breakdown-title">各食事のPFC</div>';
+                data.meal_details.forEach(detail => {
+                    html += `<div class="meal-breakdown-item">
+                        <span class="meal-breakdown-name">${icons[detail.meal_type] || detail.meal_type}</span>
+                        <div class="meal-breakdown-values">
+                            <span style="color:#1976d2">P:${detail.pfc.protein}g</span>
+                            <span style="color:#f57c00">F:${detail.pfc.fat}g</span>
+                            <span style="color:#388e3c">C:${detail.pfc.carbs}g</span>
+                            <span style="color:#c2185b">${detail.pfc.calories}kcal</span>
+                        </div>
+                    </div>`;
+                });
+                breakdownEl.innerHTML = html;
+            } else {
+                breakdownEl.innerHTML = '';
+            }
+
+            // Daily totals
             document.getElementById('proteinValue').textContent = data.pfc.protein;
             document.getElementById('fatValue').textContent = data.pfc.fat;
             document.getElementById('carbsValue').textContent = data.pfc.carbs;
             document.getElementById('caloriesValue').textContent = data.pfc.calories;
             document.getElementById('aiComment').textContent = data.pfc.comment || '-';
 
+            // Image
             currentImageBase64 = data.image_base64;
             document.getElementById('generatedImage').src = `data:image/jpeg;base64,${data.image_base64}`;
 
-            const mealSummary = meals.map(m => {
-                const icons = { breakfast: '🌅', lunch: '☀️', dinner: '🌙', snack: '🍪' };
-                return `${icons[m.meal_type]} ${m.description}`;
-            }).join('\n');
-
-            currentCaption = `${data.caption}\n\n📊 本日の食事\n${mealSummary}\n\n📈 PFC詳細\nP: ${data.pfc.protein}g / F: ${data.pfc.fat}g / C: ${data.pfc.carbs}g\n🔥 ${data.pfc.calories}kcal\n\n💬 ${data.pfc.comment || ''}`;
+            // Caption - use API caption directly without duplication
+            currentCaption = data.caption || '';
             document.getElementById('captionBox').textContent = currentCaption;
             document.getElementById('resultCard').classList.add('show');
         }
@@ -973,6 +1075,34 @@
             document.getElementById('errorBox').classList.remove('show');
             ['breakfast', 'lunch', 'dinner', 'snack'].forEach(removePhoto);
             document.getElementById('dateInput').valueAsDate = new Date();
+        }
+
+        // ========== Custom Image Upload ==========
+        async function uploadCustomImage() {
+            const input = document.getElementById('customImageInput');
+            if (!input.files || !input.files[0]) return;
+
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const base64 = e.target.result.split(',')[1];
+                const date = document.getElementById('dateInput').value;
+
+                // Update displayed image immediately
+                currentImageBase64 = base64;
+                document.getElementById('generatedImage').src = e.target.result;
+
+                // Upload to server
+                try {
+                    await fetch('/api/v1/meal/upload-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                        body: JSON.stringify({ date: date, image_base64: base64 })
+                    });
+                } catch (err) {
+                    // Image is already updated locally, server save is best-effort
+                }
+            };
+            reader.readAsDataURL(input.files[0]);
         }
 
         // ========== Calendar ==========
