@@ -40,6 +40,14 @@ class DailyMealInput(BaseModel):
     )
 
 
+class MealPFCResult(BaseModel):
+    """個別食事のPFC結果"""
+
+    meal_type: MealType
+    description: str | None = None
+    pfc: PFCData
+
+
 class PostResult(BaseModel):
     """投稿結果"""
 
@@ -49,6 +57,7 @@ class PostResult(BaseModel):
     image_base64: str | None = Field(default=None, description="生成画像（Base64 JPEG）")
     caption: str | None = None
     pfc: PFCData | None = None
+    meal_details: list[MealPFCResult] = Field(default_factory=list, description="各食事ごとのPFC")
     error: str | None = None
 
 
