@@ -1,108 +1,65 @@
 # CLAUDE.md
 
-このファイルはClaude Code（claude.ai/code）がこのリポジトリを扱う際の参考情報です。
+このファイルは、エージェントがこのリポジトリを扱う際の補助メモです。
 
 ## プロジェクト概要
 
-ChatGPT Diet App - AI × Instagram自動投稿でダイエット記録を継続するフルスタックアプリ
+ChatGPT Diet App - ダイエット記録用のPFC計算、投稿文、投稿用画像を作るWebアプリ。
 
 ## 技術スタック
 
-- **バックエンド**: FastAPI (Python 3.11+)
-- **フロントエンド**: Vanilla JS + Chart.js（SPA、`app/static/index.html`）
-- **データベース**: SQLite + SQLAlchemy async
-- **AI**: OpenAI GPT-4o（PFC分析）、DALL-E（画像生成）
-- **外部連携**: Instagram（instagrapi）
+- バックエンド: FastAPI (Python 3.11+)
+- フロントエンド: Vanilla JS + Chart.js
+- データベース: SQLite + SQLAlchemy async
+- AI: OpenAI API
 
 ## よく使うコマンド
 
 ```bash
-# ローカル起動（Docker）
-docker compose up -d
-
-# ローカル起動（Python）
-pip install -e .
-python -m app.main
-
-# テスト
-pytest
-
-# リント
-ruff check .
-
-# 本番デプロイ（Railway）
-git push origin main
+python -m pip install -e .
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m pytest -q
+docker compose up --build
 ```
 
 ## プロジェクト構造
 
-```
+```text
 app/
-├── main.py              # FastAPIアプリケーション
-├── config.py            # 環境変数設定
-├── api/routes.py        # APIエンドポイント
+├── main.py
+├── config.py
+├── api/routes.py
 ├── models/
-│   ├── database.py      # SQLAlchemyモデル
-│   └── schemas.py       # Pydanticスキーマ
 ├── services/
-│   ├── meal_processor.py    # 食事処理パイプライン
-│   ├── openai_service.py    # OpenAI連携
-│   └── instagram_service.py # Instagram投稿
-└── static/
-    └── index.html       # フロントエンドSPA
+│   ├── day_counter.py
+│   ├── image_editor.py
+│   ├── meal_processor.py
+│   └── openai_service.py
+└── static/index.html
 ```
 
 ## デプロイ
 
-### 本番環境
+- プラットフォーム: Railway
+- Public URL: https://chatgpt-diet-app-production.up.railway.app/
+- Private URL: chatgpt-diet-app.railway.internal
+- デプロイ方式: `main` ブランチへの push で自動デプロイ
+- 永続化: Railway Volume を `/data` にマウント
+- DB保存先: `/data/diet_app.db`
 
-- **URL**: https://chatgpt-diet-app-production.up.railway.app/
-- **プラットフォーム**: Railway
-- **デプロイ方法**: GitHub連携による自動デプロイ（`main`ブランチ）
-
-### デプロイ時の注意事項
-
-1. **自動デプロイ**: `main`ブランチへのプッシュで自動デプロイされる
-2. **環境変数**: Railwayダッシュボードで管理（`.env`ファイルは使用されない）
-3. **データ永続化**: Railway Volumeを`/data`にマウントすることでSQLiteを永続化（設定済み）
-4. **ログ確認**: Railwayダッシュボードの「Logs」タブで確認
-5. **ロールバック**: Railwayダッシュボードから過去のデプロイに戻すことが可能
-
-### Railway Volume設定
-
-SQLiteデータを永続化するためにVolumeが設定されている：
-- Mount Path: `/data`
-- DBファイル: `/data/diet_app.db`
-
-アプリは`/data`ディレクトリが存在すれば自動的にそちらを使用する（`app/config.py`の`db_url`プロパティ）。
-
-### 環境変数（本番で必要）
+## 環境変数
 
 | 変数名 | 説明 |
-|--------|------|
-| `OPENAI_API_KEY` | OpenAI APIキー（必須） |
-| `SECRET_KEY` | API認証キー（必須） |
-| `INSTAGRAM_USERNAME` | Instagramユーザー名 |
-| `INSTAGRAM_PASSWORD` | Instagramパスワード |
+| --- | --- |
+| `OPENAI_API_KEY` | OpenAI APIキー |
+| `SECRET_KEY` | API認証キー |
+| `HOST` | サーバーホスト |
+| `PORT` | サーバーポート |
+| `DATABASE_URL` | 外部DBを使う場合のみ |
 
-### トラブルシューティング
+## クロスプラットフォーム方針
 
-- **デプロイ失敗**: Railwayダッシュボードでビルドログを確認
-- **APIエラー**: `X-API-Key`ヘッダーが正しいか確認
-- **Instagram投稿失敗**: 2段階認証やアカウント制限を確認
-
-## API認証
-
-すべてのAPIエンドポイント（`/api/v1/health`を除く）は`X-API-Key`ヘッダーが必要：
-
-```bash
-curl -H "X-API-Key: YOUR_SECRET_KEY" https://chatgpt-diet-app-production.up.railway.app/api/v1/meal/history
-```
-
-## フロントエンド
-
-- **入力タブ**: 食事記録（朝食・昼食・夕食・間食）
-- **カレンダータブ**: 月間履歴表示
-- **グラフタブ**: カロリー・タンパク質の推移（Chart.js）
-
-PWAとしてiOSホーム画面に追加可能。
+- パスは `pathlib` で扱う
+- ローカルDBと画像保存先はプロジェクト基準で解決する
+- ローカル起動は `python -m uvicorn app.main:app ...` を基本にする
+- OS固有の手順差分はREADMEへ明記する

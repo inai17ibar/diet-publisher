@@ -1,18 +1,17 @@
 import base64
 from datetime import datetime
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import MealLog
 from app.models.schemas import DailyMealInput, MealInput, MealPFCResult, PFCData, PostResult
-from app.services.instagram_service import instagram_service
+from app.services.day_counter import calculate_day_number
+from app.services.image_editor import create_share_image
 from app.services.openai_service import (
     analyze_meal_from_image,
     analyze_meal_from_text,
     generate_caption,
-    generate_placeholder_image,
 )
 
 
@@ -77,10 +76,10 @@ async def process_daily_meals(
 async def create_and_post(
     daily_input: DailyMealInput, session: AsyncSession, auto_post: bool = True
 ) -> PostResult:
-    """食事を処理して投稿まで行う"""
+    """食事を処理して、共有用の画像と投稿文を作る。"""
 
-    # Check if we have any photos
-    has_photo = any(meal.has_image() for meal in daily_input.meals)
+    # Meal photos are for nutrition estimation; the share image is edited separately.
+    has_photo = daily_input.share_image_base64 is not None
 
     # Calculate PFC
     pfc, meal_details = await process_daily_meals(daily_input)
@@ -93,40 +92,36 @@ async def create_and_post(
         description = "、".join(descriptions) if descriptions else "本日の食事"
 
     # Generate caption
-    caption = await generate_caption(pfc, description=description, has_photo=has_photo)
+    day_number = calculate_day_number(daily_input.date)
+    caption = await generate_caption(
+        pfc,
+        description=description,
+        has_photo=has_photo,
+        day_number=day_number,
+        record_date=daily_input.date.strftime("%Y.%m.%d"),
+    )
 
     # Prepare image
-    if has_photo:
-        # Use the first photo
-        for meal in daily_input.meals:
-            if meal.has_image():
-                image_data = base64.b64decode(meal.image_base64)
-                mode = "photo"
-                break
+    if daily_input.share_image_base64:
+        original_image_data = base64.b64decode(daily_input.share_image_base64)
+        image_data = create_share_image(
+            original_image_data,
+            record_date=daily_input.date,
+            day_number=day_number,
+            pfc=pfc,
+        )
+        mode = "photo"
     else:
-        # Generate placeholder image with DALL-E
-        image_data = await generate_placeholder_image(pfc, description=description)
+        image_data = None
         mode = "text_only"
 
     # Save image locally
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    image_filename = f"meal_{timestamp}.jpg"
-    image_path = settings.images_dir / image_filename
-    image_path.write_bytes(image_data)
-
-    # Post to Instagram (only if enabled)
-    post_id = None
-    error = None
-
-    if auto_post and settings.instagram_enabled:
-        try:
-            post_id = await instagram_service.post_photo(image_data, caption)
-        except Exception as e:
-            # Get detailed error message if available
-            detailed_error = instagram_service.get_last_error()
-            error = detailed_error if detailed_error else str(e)
-    elif auto_post and not settings.instagram_enabled:
-        error = "Instagram投稿は無効です。手動で投稿してください。"
+    image_path = None
+    if image_data is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_filename = f"meal_{timestamp}.jpg"
+        image_path = settings.images_dir / image_filename
+        image_path.write_bytes(image_data)
 
     # Save to database
     meal_log = MealLog(
@@ -137,27 +132,24 @@ async def create_and_post(
         calories=pfc.calories,
         meal_description=description,
         ai_comment=pfc.comment,
-        instagram_post_id=post_id,
+        instagram_post_id=None,
         caption=caption,
-        image_path=str(image_path),
+        image_path=str(image_path) if image_path else None,
         mode=mode,
     )
     session.add(meal_log)
     await session.commit()
 
-    # Success if: posted to Instagram, or auto_post is off, or Instagram is disabled
-    success = post_id is not None or not auto_post or not settings.instagram_enabled
-
-    # Encode image as Base64 for mobile sharing
-    image_base64 = base64.b64encode(image_data).decode("utf-8")
+    image_base64 = base64.b64encode(image_data).decode("utf-8") if image_data else None
 
     return PostResult(
-        success=success,
-        post_id=post_id,
-        image_url=str(image_path),
+        success=True,
+        day_number=day_number,
+        post_id=None,
+        image_url=str(image_path) if image_path else None,
         image_base64=image_base64,
         caption=caption,
         pfc=pfc,
         meal_details=meal_details,
-        error=error,
+        error=None,
     )

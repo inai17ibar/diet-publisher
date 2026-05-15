@@ -4,7 +4,6 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.config import settings
@@ -23,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ChatGPT Diet App",
-    description="AI-powered diet tracking with automatic Instagram posting",
+    description="AI-powered diet tracking with share-ready image and post text creation",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -66,5 +65,5 @@ if __name__ == "__main__":
         "app.main:app",
         host=settings.host,
         port=settings.port,
-        reload=True,
+        reload=False,
     )

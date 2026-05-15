@@ -40,9 +40,6 @@ images/
 *.sqlite
 *.sqlite3
 
-# Instagram session
-instagram_session.json
-
 # Logs
 *.log
 logs/

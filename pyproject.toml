@@ -1,14 +1,13 @@
 [project]
 name = "chatgpt-diet-app"
 version = "0.1.0"
-description = "AI-powered diet tracking with automatic Instagram posting"
+description = "AI-powered diet tracking with share-ready image and post text creation"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
     "openai>=1.12.0",
-    "instagrapi>=2.0.0",
     "pillow>=10.2.0",
     "httpx>=0.26.0",
     "python-multipart>=0.0.9",

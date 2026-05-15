@@ -35,6 +35,10 @@ class DailyMealInput(BaseModel):
 
     date: datetime = Field(default_factory=datetime.now)
     meals: list[MealInput] = Field(default_factory=list)
+    share_image_base64: str | None = Field(
+        default=None,
+        description="投稿用に編集する代表写真（Base64）",
+    )
     total_description: str | None = Field(
         default=None, description="1日の食事をまとめて説明（簡易モード用）"
     )
@@ -52,6 +56,7 @@ class PostResult(BaseModel):
     """投稿結果"""
 
     success: bool
+    day_number: int | None = None
     post_id: str | None = None
     image_url: str | None = None
     image_base64: str | None = Field(default=None, description="生成画像（Base64 JPEG）")
@@ -66,6 +71,7 @@ class MealLogResponse(BaseModel):
 
     id: int
     date: str
+    day_number: int | None = None
     protein: float
     fat: float
     carbs: float
@@ -79,6 +85,7 @@ class DailySummaryResponse(BaseModel):
     """日別サマリーのレスポンス"""
 
     date: str
+    day_number: int | None = None
     total_protein: float
     total_fat: float
     total_carbs: float

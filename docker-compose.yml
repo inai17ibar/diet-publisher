@@ -7,6 +7,5 @@ services:
       - .env
     volumes:
       - ./images:/app/images
-      - ./diet_app.db:/app/diet_app.db
-      - ./instagram_session.json:/app/instagram_session.json
+      - ./data:/data
     restart: unless-stopped
