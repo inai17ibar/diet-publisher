@@ -7,7 +7,10 @@ from openai import AsyncOpenAI
 from app.config import settings
 from app.models.schemas import PFCData
 
-client = AsyncOpenAI(api_key=settings.openai_api_key)
+def _get_client() -> AsyncOpenAI:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY が未設定です")
+    return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
 SYSTEM_PROMPT_PFC = """あなたは栄養管理の専門家です。
@@ -31,7 +34,7 @@ SYSTEM_PROMPT_PFC = """あなたは栄養管理の専門家です。
 
 async def analyze_meal_from_text(description: str) -> PFCData:
     """テキストから食事のPFCを分析"""
-    response = await client.chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_PFC},
@@ -61,7 +64,7 @@ async def analyze_meal_from_image(image_base64: str, additional_info: str = "") 
         },
     ]
 
-    response = await client.chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_PFC},
@@ -75,24 +78,35 @@ async def analyze_meal_from_image(image_base64: str, additional_info: str = "") 
     return PFCData(**result)
 
 
-CAPTION_TEMPLATE = """以下の情報からInstagram投稿用のキャプションを1つだけ作成してください。
+CAPTION_TEMPLATE = """以下の情報からダイエット記録用の投稿文を1つだけ作成してください。
 重複する内容は絶対に含めないでください。
 
+記録日: {record_date}
+継続日数: {day_label}
 食事内容: {description}
 P(タンパク質): {protein}g / F(脂質): {fat}g / C(炭水化物): {carbs}g / {calories}kcal
 
 以下の形式で出力してください（---は含めない）：
 食事に関する一言（絵文字OK、1行）
 
+{day_label}
 P {protein} / F {fat} / C {carbs} / {calories} kcal
 
 ハッシュタグは含めないでください。PFC数値は上記の1行だけにしてください。
 """
 
 
-async def generate_caption(pfc: PFCData, description: str = "", has_photo: bool = True) -> str:
-    """Instagram用キャプションを生成"""
+async def generate_caption(
+    pfc: PFCData,
+    description: str = "",
+    has_photo: bool = True,
+    day_number: int | None = None,
+    record_date: str = "",
+) -> str:
+    """共有用の投稿文を生成"""
     prompt = CAPTION_TEMPLATE.format(
+        record_date=record_date,
+        day_label=f"Day {day_number}" if day_number else "Diet record",
         description=description or "本日の食事",
         protein=pfc.protein,
         fat=pfc.fat,
@@ -100,7 +114,7 @@ async def generate_caption(pfc: PFCData, description: str = "", has_photo: bool 
         calories=pfc.calories,
     )
 
-    response = await client.chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=200,
@@ -112,43 +126,3 @@ async def generate_caption(pfc: PFCData, description: str = "", has_photo: bool 
     caption = re.sub(r"\n?---$", "", caption)
 
     return caption
-
-
-IMAGE_PROMPT_TEMPLATE = """A beautiful Instagram-style food photography flat lay composition.
-Top-down view of an elegant marble or wooden table surface.
-In the center, artistic illustration of healthy meals: {food_description}.
-The food is arranged beautifully with garnishes and small decorative elements.
-On the side, a stylish nutrition info card showing:
-"P {protein}g / F {fat}g / C {carbs}g"
-"{calories} kcal"
-Soft natural lighting from the side, creating gentle shadows.
-Warm, inviting color palette with fresh greens, appetizing food colors.
-Professional food styling, clean aesthetic, Instagram-worthy composition.
-Minimalist design with plenty of white space.
-NO text other than the nutrition numbers. Photorealistic food illustration style."""
-
-
-async def generate_placeholder_image(pfc: PFCData, description: str = "") -> bytes:
-    """写真がない場合の代替画像を生成（DALL-E）"""
-    # 食事の説明がなければデフォルトを使用
-    food_desc = description if description else "a balanced healthy meal with protein, vegetables, and whole grains"
-
-    prompt = IMAGE_PROMPT_TEMPLATE.format(
-        food_description=food_desc,
-        protein=int(pfc.protein),
-        fat=int(pfc.fat),
-        carbs=int(pfc.carbs),
-        calories=int(pfc.calories),
-    )
-
-    response = await client.images.generate(
-        model="dall-e-3",
-        prompt=prompt,
-        size="1024x1024",
-        quality="standard",
-        n=1,
-        response_format="b64_json",
-    )
-
-    image_b64 = response.data[0].b64_json
-    return base64.b64decode(image_b64)

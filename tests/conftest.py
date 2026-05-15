@@ -1,12 +1,4 @@
 import os
-import sys
-from unittest.mock import MagicMock
-
-# Mock instagrapi before any app imports (it has a heavy moviepy dependency)
-instagrapi_mock = MagicMock()
-sys.modules["instagrapi"] = instagrapi_mock
-sys.modules["instagrapi.exceptions"] = MagicMock()
-
 # Set required env vars before any app imports
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("SECRET_KEY", "test-secret")

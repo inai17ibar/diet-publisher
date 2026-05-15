@@ -18,6 +18,13 @@ async def test_health_check(client):
 
 
 @pytest.mark.asyncio
+async def test_get_day_number(client, api_headers):
+    response = await client.get("/api/v1/meal/day-number?date=2026-05-14", headers=api_headers)
+    assert response.status_code == 200
+    assert response.json() == {"date": "2026-05-14", "day_number": 329}
+
+
+@pytest.mark.asyncio
 async def test_api_info(client):
     response = await client.get("/api")
     assert response.status_code == 200
@@ -74,6 +81,7 @@ async def test_get_meal_history_with_data(client, api_headers):
     assert data[0]["protein"] == 25.0
     assert data[0]["meal_description"] == "chicken salad"
     assert data[0]["date"] == "2024-03-15"
+    assert data[0]["day_number"] is None
 
 
 @pytest.mark.asyncio
@@ -124,6 +132,7 @@ async def test_get_daily_summary_with_data(client, api_headers):
     assert data[0]["total_protein"] == 40.0
     assert data[0]["total_calories"] == 600.0
     assert data[0]["meal_count"] == 2
+    assert data[0]["day_number"] is None
 
 
 @pytest.mark.asyncio
@@ -175,6 +184,7 @@ async def test_post_meal_with_mock(client, api_headers, tmp_path):
 
     mock_result = PostResult(
         success=True,
+        day_number=329,
         image_base64=base64.b64encode(b"test").decode(),
         caption="Great meal!",
         pfc=PFCData(protein=25.0, fat=12.0, carbs=40.0, calories=350.0, comment="Nice!"),
@@ -200,6 +210,7 @@ async def test_post_meal_with_mock(client, api_headers, tmp_path):
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
+    assert data["day_number"] == 329
     assert data["pfc"]["protein"] == 25.0
     assert len(data["meal_details"]) == 1
     assert data["meal_details"][0]["pfc"]["protein"] == 25.0

@@ -104,6 +104,22 @@
             font-size: 16px;
         }
 
+        .day-status {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 14px;
+            margin-bottom: 20px;
+            border-radius: 12px;
+            background: #f0f4ff;
+            color: #333;
+        }
+
+        .day-status strong {
+            color: #667eea;
+            font-size: 1.15rem;
+        }
+
         .meal-section {
             margin-bottom: 20px;
             padding: 16px;
@@ -631,6 +647,16 @@
             margin-bottom: 10px;
         }
 
+        .record-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            color: #667eea;
+            font-size: 0.85rem;
+            font-weight: 700;
+        }
+
         .meal-breakdown-item {
             display: flex;
             justify-content: space-between;
@@ -685,6 +711,19 @@
         .custom-image-label:hover {
             background: #e0e8ff;
         }
+
+        .share-image-section {
+            margin-bottom: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            background: #f8f9fa;
+        }
+
+        .share-image-title {
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: #333;
+        }
     </style>
 </head>
 <body>
@@ -700,6 +739,23 @@
                     <input type="date" id="dateInput">
                 </div>
 
+                <div class="day-status">
+                    <span>現在</span>
+                    <strong id="currentDayNumber">-</strong>
+                </div>
+
+                <div class="share-image-section">
+                    <div class="share-image-title">投稿用写真</div>
+                    <div class="photo-upload">
+                        <label class="photo-upload-label" for="sharePhoto">📷 投稿用写真を選ぶ</label>
+                        <input type="file" id="sharePhoto" accept="image/*" onchange="previewSharePhoto()">
+                        <div class="photo-preview" id="sharePreview">
+                            <img id="sharePreviewImg" src="">
+                            <button class="remove-btn" onclick="removeSharePhoto()">写真を削除</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="meal-section meal-breakfast">
                     <div class="meal-header">
                         <span class="meal-icon">🌅</span>
@@ -707,7 +763,7 @@
                     </div>
                     <textarea id="breakfastInput" placeholder="例：トースト、目玉焼き、コーヒー"></textarea>
                     <div class="photo-upload">
-                        <label class="photo-upload-label" for="breakfastPhoto">📷 写真を追加</label>
+                        <label class="photo-upload-label" for="breakfastPhoto">📷 栄養推定用写真を追加</label>
                         <input type="file" id="breakfastPhoto" accept="image/*" onchange="previewPhoto('breakfast')">
                         <div class="photo-preview" id="breakfastPreview">
                             <img id="breakfastPreviewImg" src="">
@@ -723,7 +779,7 @@
                     </div>
                     <textarea id="lunchInput" placeholder="例：サラダチキン、味噌汁、ご飯"></textarea>
                     <div class="photo-upload">
-                        <label class="photo-upload-label" for="lunchPhoto">📷 写真を追加</label>
+                        <label class="photo-upload-label" for="lunchPhoto">📷 栄養推定用写真を追加</label>
                         <input type="file" id="lunchPhoto" accept="image/*" onchange="previewPhoto('lunch')">
                         <div class="photo-preview" id="lunchPreview">
                             <img id="lunchPreviewImg" src="">
@@ -739,7 +795,7 @@
                     </div>
                     <textarea id="dinnerInput" placeholder="例：焼き魚、サラダ、豆腐"></textarea>
                     <div class="photo-upload">
-                        <label class="photo-upload-label" for="dinnerPhoto">📷 写真を追加</label>
+                        <label class="photo-upload-label" for="dinnerPhoto">📷 栄養推定用写真を追加</label>
                         <input type="file" id="dinnerPhoto" accept="image/*" onchange="previewPhoto('dinner')">
                         <div class="photo-preview" id="dinnerPreview">
                             <img id="dinnerPreviewImg" src="">
@@ -755,7 +811,7 @@
                     </div>
                     <textarea id="snackInput" placeholder="例：プロテインバー、ナッツ"></textarea>
                     <div class="photo-upload">
-                        <label class="photo-upload-label" for="snackPhoto">📷 写真を追加</label>
+                        <label class="photo-upload-label" for="snackPhoto">📷 栄養推定用写真を追加</label>
                         <input type="file" id="snackPhoto" accept="image/*" onchange="previewPhoto('snack')">
                         <div class="photo-preview" id="snackPreview">
                             <img id="snackPreviewImg" src="">
@@ -773,7 +829,7 @@
             <div class="card loading" id="loadingCard">
                 <div class="spinner"></div>
                 <p>AIが分析中...</p>
-                <p style="font-size: 0.9rem; color: #666; margin-top: 8px;">画像生成に時間がかかる場合があります</p>
+                <p style="font-size: 0.9rem; color: #666; margin-top: 8px;">写真と記録内容をまとめています</p>
             </div>
 
             <!-- Error -->
@@ -781,6 +837,11 @@
 
             <!-- Result -->
             <div class="card result" id="resultCard">
+                <div class="record-meta">
+                    <span id="resultDateLabel"></span>
+                    <span id="resultDayNumber"></span>
+                </div>
+
                 <!-- Per-meal breakdown -->
                 <div class="meal-breakdown" id="mealBreakdown"></div>
 
@@ -812,17 +873,9 @@
                     <div id="aiComment">-</div>
                 </div>
 
-                <img class="generated-image" id="generatedImage" src="" alt="生成画像">
+                <img class="generated-image" id="generatedImage" src="" alt="記録画像" style="display:none">
 
-                <!-- Custom image upload -->
-                <div class="custom-image-upload">
-                    <label class="custom-image-label" for="customImageInput">
-                        📷 自分の写真に差し替える
-                    </label>
-                    <input type="file" id="customImageInput" accept="image/*" style="display:none" onchange="uploadCustomImage()">
-                </div>
-
-                <label style="margin-top:16px">📝 キャプション</label>
+                <label style="margin-top:16px">📝 投稿文</label>
                 <div class="caption-box" id="captionBox"></div>
 
                 <div class="action-buttons">
@@ -900,6 +953,7 @@
         const API_KEY = '26c128ce99310f92692f649f3c15abc17a8927344e2fb527a5c41e82feec8fd4';
         let currentImageBase64 = '';
         let currentCaption = '';
+        let shareImageBase64 = null;
         const photoData = { breakfast: null, lunch: null, dinner: null, snack: null };
 
         // Calendar state
@@ -914,6 +968,7 @@
 
         // Init date
         document.getElementById('dateInput').valueAsDate = new Date();
+        loadCurrentDayNumber();
 
         // ========== Tab Switching ==========
         function switchTab(tabId, btn) {
@@ -959,6 +1014,44 @@
             photoData[mealType] = null;
         }
 
+        function previewSharePhoto() {
+            const input = document.getElementById('sharePhoto');
+            const preview = document.getElementById('sharePreview');
+            const previewImg = document.getElementById('sharePreviewImg');
+
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewImg.src = e.target.result;
+                    preview.classList.add('show');
+                    shareImageBase64 = e.target.result.split(',')[1];
+                };
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        function removeSharePhoto() {
+            const input = document.getElementById('sharePhoto');
+            const preview = document.getElementById('sharePreview');
+            const previewImg = document.getElementById('sharePreviewImg');
+            input.value = '';
+            previewImg.src = '';
+            preview.classList.remove('show');
+            shareImageBase64 = null;
+        }
+
+        async function loadCurrentDayNumber() {
+            try {
+                const response = await fetch('/api/v1/meal/day-number', {
+                    headers: { 'X-API-Key': API_KEY }
+                });
+                const data = await response.json();
+                document.getElementById('currentDayNumber').textContent = data.day_number ? `Day ${data.day_number}` : '-';
+            } catch (error) {
+                document.getElementById('currentDayNumber').textContent = '-';
+            }
+        }
+
         // ========== Submit Meal ==========
         async function submitMeal() {
             const date = document.getElementById('dateInput').value;
@@ -978,7 +1071,11 @@
             if (dinner) meals.push({ meal_type: 'dinner', description: dinner, image_base64: photoData.dinner });
             if (snack) meals.push({ meal_type: 'snack', description: snack, image_base64: photoData.snack });
 
-            const requestBody = { date: date + 'T00:00:00', meals: meals };
+            const requestBody = {
+                date: date + 'T00:00:00',
+                meals: meals,
+                share_image_base64: shareImageBase64,
+            };
 
             document.getElementById('inputCard').style.display = 'none';
             document.getElementById('loadingCard').classList.add('show');
@@ -1033,10 +1130,19 @@
             document.getElementById('carbsValue').textContent = data.pfc.carbs;
             document.getElementById('caloriesValue').textContent = data.pfc.calories;
             document.getElementById('aiComment').textContent = data.pfc.comment || '-';
+            document.getElementById('resultDateLabel').textContent = document.getElementById('dateInput').value;
+            document.getElementById('resultDayNumber').textContent = data.day_number ? `Day ${data.day_number}` : '';
 
             // Image
             currentImageBase64 = data.image_base64;
-            document.getElementById('generatedImage').src = `data:image/jpeg;base64,${data.image_base64}`;
+            const generatedImage = document.getElementById('generatedImage');
+            if (data.image_base64) {
+                generatedImage.src = `data:image/jpeg;base64,${data.image_base64}`;
+                generatedImage.style.display = 'block';
+            } else {
+                generatedImage.removeAttribute('src');
+                generatedImage.style.display = 'none';
+            }
 
             // Caption - use API caption directly without duplication
             currentCaption = data.caption || '';
@@ -1059,6 +1165,10 @@
         }
 
         function downloadImage() {
+            if (!currentImageBase64) {
+                alert('保存できる画像がありません。食事写真を追加してください。');
+                return;
+            }
             const link = document.createElement('a');
             link.href = `data:image/jpeg;base64,${currentImageBase64}`;
             link.download = `pfc_${document.getElementById('dateInput').value}.jpg`;
@@ -1074,35 +1184,8 @@
             document.getElementById('snackInput').value = '';
             document.getElementById('errorBox').classList.remove('show');
             ['breakfast', 'lunch', 'dinner', 'snack'].forEach(removePhoto);
+            removeSharePhoto();
             document.getElementById('dateInput').valueAsDate = new Date();
-        }
-
-        // ========== Custom Image Upload ==========
-        async function uploadCustomImage() {
-            const input = document.getElementById('customImageInput');
-            if (!input.files || !input.files[0]) return;
-
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const base64 = e.target.result.split(',')[1];
-                const date = document.getElementById('dateInput').value;
-
-                // Update displayed image immediately
-                currentImageBase64 = base64;
-                document.getElementById('generatedImage').src = e.target.result;
-
-                // Upload to server
-                try {
-                    await fetch('/api/v1/meal/upload-image', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-                        body: JSON.stringify({ date: date, image_base64: base64 })
-                    });
-                } catch (err) {
-                    // Image is already updated locally, server save is best-effort
-                }
-            };
-            reader.readAsDataURL(input.files[0]);
         }
 
         // ========== Calendar ==========
@@ -1124,7 +1207,14 @@
                 historyCache = {};
                 logs.forEach(log => {
                     if (!calendarData[log.date]) {
-                        calendarData[log.date] = { calories: 0, protein: 0, fat: 0, carbs: 0, meals: [] };
+                        calendarData[log.date] = {
+                            calories: 0,
+                            protein: 0,
+                            fat: 0,
+                            carbs: 0,
+                            dayNumber: log.day_number,
+                            meals: [],
+                        };
                     }
                     calendarData[log.date].calories += log.calories;
                     calendarData[log.date].protein += log.protein;
@@ -1205,7 +1295,8 @@
             });
 
             const parts = dateStr.split('-');
-            title.textContent = `${parseInt(parts[1])}月${parseInt(parts[2])}日の記録`;
+            const dayLabel = data && data.dayNumber ? ` / Day ${data.dayNumber}` : '';
+            title.textContent = `${parseInt(parts[1])}月${parseInt(parts[2])}日の記録${dayLabel}`;
 
             if (!data || data.meals.length === 0) {
                 content.innerHTML = '<div class="no-data-message">この日の記録はありません</div>';

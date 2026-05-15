@@ -1,221 +1,209 @@
 # ChatGPT Diet App
 
-AI × 自動化 × Instagram自動投稿でダイエット記録を継続するアプリ
+写真と食事内容から、ダイエット記録用の `PFC / カロリー`、投稿文、投稿用画像を作るWebアプリです。  
+投稿用画像は、アップロードした代表写真に `日付 / Day数 / kcal / PFC` を重ねて生成します。
 
-## 機能
+## 主な機能
 
-- **写真モード**: 食事写真をアップロード → GPT-4 Visionで自動PFC計算
-- **テキストモード**: 食事をテキストで入力 → AI画像生成 + PFC計算
-- **自動Instagram投稿**: キャプション自動生成、ハッシュタグ自動追加
-- **iPhoneショートカット対応**: 1タップで記録・投稿
+- 食事テキストまたは食事写真からPFCとカロリーを推定
+- 投稿用の代表写真を別アップロードし、記録用画像を生成
+- 投稿文の生成
+- 継続日数の表示
+- 食事履歴、カレンダー、日別集計、グラフ表示
 
-## セットアップ
+## 前提
 
-### 1. 環境変数の設定
+- Python 3.11 以上
+- OpenAI APIキー
+- Docker Desktop は任意
+
+## 環境変数
+
+`.env.example` を `.env` にコピーして編集します。
+
+### macOS / Linux
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` を編集:
+### Windows PowerShell
 
+```powershell
+Copy-Item .env.example .env
 ```
+
+### Windows Git Bash
+
+```bash
+cp .env.example .env
+```
+
+設定例:
+
+```env
 OPENAI_API_KEY=sk-your-openai-api-key
-INSTAGRAM_USERNAME=your_instagram_username
-INSTAGRAM_PASSWORD=your_instagram_password
 SECRET_KEY=your-secret-api-key
+HOST=0.0.0.0
+PORT=8000
+IMAGES_DIR=./images
 ```
 
-### 2. 起動方法
+`OPENAI_API_KEY` が未設定でも画面表示はできますが、AI分析と投稿文生成は使えません。
 
-#### Docker（推奨）
+## ローカル起動
+
+### Docker
 
 ```bash
-docker compose up -d
+docker compose up --build
 ```
 
-#### ローカル実行
+起動後:
+
+```text
+http://127.0.0.1:8000
+```
+
+Compose では以下を永続化します。
+
+- `./images` -> `/app/images`
+- `./data` -> `/data`
+
+### Python 直接起動
+
+#### macOS / Linux
 
 ```bash
-# Python 3.11以上が必要
-pip install -e .
-python -m app.main
+python3 -m pip install -e .
+python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-サーバーが `http://localhost:8000` で起動します。
+#### Windows PowerShell
 
-## API エンドポイント
+```powershell
+python -m pip install -e .
+$env:OPENAI_API_KEY="your-key"
+$env:SECRET_KEY="your-secret"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+#### Windows Git Bash
+
+```bash
+cd /c/Users/<USER>/path/to/chatgpt-diet-app
+python -m pip install -e .
+export OPENAI_API_KEY="your-key"
+export SECRET_KEY="your-secret"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Git Bash では `C:\...` 形式ではなく `/c/...` 形式のパスを使ってください。
+
+## データ保存
+
+- ローカル実行時:
+  - 画像: `images/`
+  - DB: `diet_app.db`
+- `/data` が存在する環境:
+  - DB: `/data/diet_app.db`
+- `DATABASE_URL` が設定されている場合:
+  - その値を優先
+
+画像保存先とDB保存先は、起動したカレントディレクトリではなくプロジェクト基準で解決します。
+
+## API
 
 ### ヘルスチェック
-```
+
+```http
 GET /api/v1/health
 ```
 
-### 簡易モード（テキストのみ）
-```
-POST /api/v1/meal/quick?description=昼：サラダチキン、夜：豚しゃぶ
-Header: X-API-Key: your-secret-key
+### 現在または指定日のDay数
+
+```http
+GET /api/v1/meal/day-number
+GET /api/v1/meal/day-number?date=2026-05-14
 ```
 
-### フルモード（写真 or テキスト）
-```
+### 1日分の記録作成
+
+```http
 POST /api/v1/meal/post
 Header: X-API-Key: your-secret-key
 Content-Type: application/json
+```
 
+```json
 {
+  "date": "2026-05-15T00:00:00",
+  "share_image_base64": "...",
   "meals": [
     {
       "meal_type": "lunch",
       "description": "サラダチキンとおにぎり",
-      "image_base64": "..."  // 任意
+      "image_base64": "..."
     }
   ]
 }
 ```
 
-### iPhoneショートカット用
-```
-POST /api/v1/shortcut/meal
-Header: X-API-Key: your-secret-key
-
-Form Data:
-- meal_type: lunch
-- description: サラダチキン
-- image_base64: (写真のBase64、任意)
-```
-
-## iPhoneショートカットの作成
-
-1. **ショートカット**アプリを開く
-2. 新規ショートカットを作成
-3. 以下のアクションを追加:
-
-### テキストのみの場合:
-```
-1. [テキストを入力を求める] → 変数「食事」に保存
-2. [URLの内容を取得]
-   - URL: https://your-server.com/api/v1/meal/quick
-   - メソッド: POST
-   - ヘッダー: X-API-Key = your-secret-key
-   - 本文: フォーム
-     - description = 変数「食事」
-```
-
-### 写真ありの場合:
-```
-1. [写真を撮る] or [写真を選択]
-2. [Base64エンコード]
-3. [テキストを入力を求める] → 変数「説明」に保存
-4. [URLの内容を取得]
-   - URL: https://your-server.com/api/v1/shortcut/meal
-   - メソッド: POST
-   - ヘッダー: X-API-Key = your-secret-key
-   - 本文: フォーム
-     - meal_type = lunch
-     - description = 変数「説明」
-     - image_base64 = 変数「Base64」
-```
-
-## ワークフロー図
-
-```
-iPhone → ショートカット
-           ↓
-      [写真あり？]
-         /    \
-      Yes      No
-       ↓        ↓
-   Vision API  テキスト解析
-       ↓        ↓
-    PFC計算  ← ← ←
-       ↓
-   キャプション生成
-       ↓
-   [写真なしの場合]
-       ↓
-   DALL-E 画像生成
-       ↓
-   Instagram投稿
-       ↓
-   SQLite保存
-```
+- `share_image_base64`: 投稿用に編集する代表写真
+- `meals[].image_base64`: 栄養推定用の食事写真
 
 ## デプロイ
 
-### 本番環境（Railway）
+現在の Railway 設定:
 
-現在のデプロイ先: https://chatgpt-diet-app-production.up.railway.app/
+- Public URL: `https://chatgpt-diet-app-production.up.railway.app/`
+- Private URL: `chatgpt-diet-app.railway.internal`
+- デプロイ方式: GitHub連携で `main` ブランチ push 時に自動デプロイ
+- 永続化: Railway Volume を `/data` にマウント
+- DB保存先: `/data/diet_app.db`
 
-#### 自動デプロイ
+### Railwayで必要な設定
 
-GitHubの`main`ブランチにプッシュすると自動デプロイされます：
+| 変数名 | 説明 | 必須 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | OpenAI APIキー | yes |
+| `SECRET_KEY` | API認証キー | yes |
+| `HOST` | 通常は `0.0.0.0` | no |
+| `PORT` | Railway 側で注入される値を利用 | no |
+| `DATABASE_URL` | 外部DBを使う場合のみ | no |
+| `IMAGES_DIR` | 画像保存先。Railwayでは `/data/images` 推奨 | no |
+
+### Railwayでの永続化
+
+1. Railway ダッシュボードで対象サービスを開く
+2. Volume を追加
+3. Mount Path を `/data` にする
+4. `IMAGES_DIR=/data/images` を設定する
+5. 再デプロイする
+
+### どちらのOSからでもデプロイするために
+
+デプロイ操作自体はOSに依存しません。  
+MacでもWindowsでも、同じGitHubリポジトリへ push すれば、接続済みのデプロイ先側で自動デプロイが走ります。
 
 ```bash
 git push origin main
 ```
 
-#### Railwayダッシュボード
+ローカル差異を減らすには、以下を推奨します。
 
-- https://railway.app/dashboard でプロジェクトを管理
-- 環境変数、ログ、メトリクスを確認可能
+- 本番確認は Docker でも一度行う
+- `.env` は各環境で個別管理し、Gitに含めない
+- Windows と macOS の両方で `python -m pytest -q` を通す
+- Railway の不要変数は削除して、環境差分を減らす
 
-#### 環境変数の設定（Railway）
-
-Railwayダッシュボードで以下の環境変数を設定：
-
-| 変数名 | 説明 | 必須 |
-|--------|------|------|
-| `OPENAI_API_KEY` | OpenAI APIキー | ✓ |
-| `SECRET_KEY` | API認証キー | ✓ |
-| `INSTAGRAM_USERNAME` | Instagramユーザー名 | |
-| `INSTAGRAM_PASSWORD` | Instagramパスワード | |
-| `HOST` | ホスト（デフォルト: 0.0.0.0） | |
-| `PORT` | ポート（Railwayが自動設定） | |
-
-#### データベース永続化（Railway Volume）
-
-SQLiteデータを永続化するには、Railway Volumeを設定：
-
-1. Railwayダッシュボードでプロジェクトを開く
-2. サービスをクリック → 「Settings」タブ
-3. 「Volumes」セクションで「Add Volume」
-4. Mount Path: `/data` を設定
-5. 再デプロイすると `/data/diet_app.db` にDBが保存される
-
-アプリは `/data` ディレクトリが存在すれば自動的にそちらを使用します。
-
-#### デプロイ時の注意事項
-
-1. **データベース**: Railway Volumeを設定しないと再デプロイ時にデータが消える
-2. **Instagram連携**: 初回ログイン時に2段階認証が必要な場合あり。ローカルで先にログインしてセッションを確認することを推奨
-3. **APIキーの管理**: 環境変数は絶対にコードにハードコードしない
-
-### 新規Railwayプロジェクトの作成
-
-1. [Railway](https://railway.app/)にログイン
-2. 「New Project」→「Deploy from GitHub repo」を選択
-3. このリポジトリを選択
-4. 環境変数を設定
-5. デプロイが自動的に開始される
-
-### VPS (Ubuntu)
+## テスト
 
 ```bash
-# Clone
-git clone https://github.com/inai17ibar/chatgpt-diet-app.git
-cd chatgpt-diet-app
-
-# Setup
-cp .env.example .env
-nano .env  # 環境変数を設定
-
-# Run
-docker compose up -d
+python -m pytest -q
 ```
 
-## 注意事項
+## 補足
 
-- Instagram APIは非公式のため、頻繁なログインや大量投稿はアカウント制限の可能性あり
-- 1日1-2回の投稿を推奨
-- 初回ログイン時は2段階認証の確認が必要な場合あり
+- このアプリは現在、Instagramへの自動投稿は行いません
+- 目的は、ダイエット記録を続けるための画像・数値・投稿文の作成です

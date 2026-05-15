@@ -18,6 +18,7 @@ from app.models.schemas import (
     MealType,
     PostResult,
 )
+from app.services.day_counter import calculate_day_number
 from app.services.meal_processor import create_and_post, process_single_meal
 
 router = APIRouter()
@@ -38,6 +39,16 @@ async def health_check():
     return HealthCheckResponse(status="ok")
 
 
+@router.get("/meal/day-number")
+async def get_day_number(
+    date: str | None = Query(None, description="対象日 (YYYY-MM-DD)"),
+    _: None = Depends(verify_api_key),
+):
+    """指定日または今日のDay数を返す。"""
+    target_date = datetime.fromisoformat(date).date() if date else datetime.now().date()
+    return {"date": target_date.isoformat(), "day_number": calculate_day_number(target_date)}
+
+
 @router.post("/meal/analyze", response_model=PostResult)
 async def analyze_meal(
     meal: MealInput,
@@ -56,7 +67,7 @@ async def post_meal(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """食事を処理してInstagramに投稿"""
+    """食事を処理して共有用の画像と投稿文を作成"""
     result = await create_and_post(daily_input, session, auto_post=auto_post)
     return result
 
@@ -69,7 +80,7 @@ async def quick_post(
     _: None = Depends(verify_api_key),
 ):
     """
-    簡易モード：テキストだけで投稿
+    簡易モード：テキストだけで記録
 
     例: "昼：サラダチキン、夜：豚しゃぶ"
     """
@@ -96,7 +107,7 @@ async def shortcut_endpoint(
     - meal_type: breakfast/lunch/dinner/snack
     - description: 食事の説明（任意）
     - image_base64: 写真のBase64（任意）
-    - auto_post: 自動投稿するか（デフォルト: true）
+    - auto_post: 互換性のため残しているが現在は使用しない
     """
     meal = MealInput(
         meal_type=meal_type,
@@ -135,6 +146,7 @@ async def get_meal_history(
         MealLogResponse(
             id=log.id,
             date=log.date.strftime("%Y-%m-%d"),
+            day_number=calculate_day_number(log.date),
             protein=log.protein,
             fat=log.fat,
             carbs=log.carbs,
@@ -174,6 +186,7 @@ async def get_daily_summary(
     return [
         DailySummaryResponse(
             date=str(row.date),
+            day_number=calculate_day_number(datetime.fromisoformat(str(row.date))),
             total_protein=row.total_protein or 0,
             total_fat=row.total_fat or 0,
             total_carbs=row.total_carbs or 0,
@@ -197,7 +210,7 @@ async def upload_daily_image(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """1日の代表画像をアップロード（DALL-E生成画像の代わりに使用）"""
+    """1日の代表画像をアップロード。"""
     target_date = datetime.fromisoformat(req.date)
 
     # Find meal logs for this date

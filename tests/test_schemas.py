@@ -1,6 +1,7 @@
 """Tests for Pydantic schemas and data models."""
 
 from app.models.schemas import (
+    DailyMealInput,
     DailySummaryResponse,
     MealInput,
     MealLogResponse,
@@ -40,6 +41,11 @@ def test_meal_input_empty_image():
     assert meal.has_image() is False
 
 
+def test_daily_meal_input_share_image():
+    daily = DailyMealInput(share_image_base64="abc123")
+    assert daily.share_image_base64 == "abc123"
+
+
 def test_meal_pfc_result():
     pfc = PFCData(protein=20.0, fat=10.0, carbs=30.0, calories=300.0)
     result = MealPFCResult(meal_type=MealType.BREAKFAST, description="toast", pfc=pfc)
@@ -64,9 +70,16 @@ def test_post_result_default_empty_details():
 
 def test_meal_log_response():
     resp = MealLogResponse(
-        id=1, date="2024-01-01", protein=20.0, fat=10.0, carbs=30.0, calories=300.0
+        id=1,
+        date="2024-01-01",
+        day_number=1,
+        protein=20.0,
+        fat=10.0,
+        carbs=30.0,
+        calories=300.0,
     )
     assert resp.id == 1
+    assert resp.day_number == 1
     assert resp.meal_description is None
     assert resp.mode == "text_only"
 
@@ -74,6 +87,7 @@ def test_meal_log_response():
 def test_daily_summary_response():
     resp = DailySummaryResponse(
         date="2024-01-01",
+        day_number=1,
         total_protein=60.0,
         total_fat=30.0,
         total_carbs=90.0,
@@ -81,4 +95,5 @@ def test_daily_summary_response():
         meal_count=3,
     )
     assert resp.meal_count == 3
+    assert resp.day_number == 1
     assert resp.total_calories == 900.0

@@ -30,7 +30,7 @@ class MealLog(Base):
     meal_description = Column(Text, nullable=True)
     ai_comment = Column(Text, nullable=True)
 
-    # Instagram投稿情報
+    # 投稿用出力
     instagram_post_id = Column(String(100), nullable=True)
     caption = Column(Text, nullable=True)
     image_path = Column(String(500), nullable=True)
