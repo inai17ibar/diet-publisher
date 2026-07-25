@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.routes import router
 from app.config import settings
 from app.models.database import init_db
+from app.services.meal_processor import DuplicateMealError
 
 
 @asynccontextmanager
@@ -35,6 +36,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(DuplicateMealError)
+async def duplicate_meal_handler(request: Request, exc: DuplicateMealError):
+    """重複リクエストは409で返す（ショートカット側はエラー時にヘルスケア記録をスキップ）"""
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 # ルーター登録
 app.include_router(router, prefix="/api/v1")

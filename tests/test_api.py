@@ -214,3 +214,92 @@ async def test_post_meal_with_mock(client, api_headers, tmp_path):
     assert data["pfc"]["protein"] == 25.0
     assert len(data["meal_details"]) == 1
     assert data["meal_details"][0]["pfc"]["protein"] == 25.0
+
+
+@pytest.mark.asyncio
+async def test_shortcut_double_tap_returns_conflict(client, api_headers):
+    """ダブルタップ: 同時2リクエストは1件だけ記録され、もう1件は409になる。"""
+    import asyncio
+
+    from app.models.schemas import PFCData
+
+    async def slow_analyze(description):
+        await asyncio.sleep(0.3)
+        return PFCData(protein=30, fat=20, carbs=50, calories=500, comment="test")
+
+    async def fake_caption(pfc, **kwargs):
+        return "caption"
+
+    with (
+        patch("app.services.meal_processor.analyze_meal_from_text", side_effect=slow_analyze),
+        patch("app.services.meal_processor.generate_caption", side_effect=fake_caption),
+    ):
+        url = "/api/v1/shortcut/meal?meal_type=lunch&description=サラダチキン"
+        r1, r2 = await asyncio.gather(
+            client.post(url, headers=api_headers),
+            client.post(url, headers=api_headers),
+        )
+
+    assert sorted([r1.status_code, r2.status_code]) == [200, 409]
+
+    response = await client.get("/api/v1/meal/history", headers=api_headers)
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["calories"] == 500.0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_meal_within_window_conflict(client, api_headers):
+    """5分以内に同じ説明の記録があれば409になり、OpenAIは呼ばれない。"""
+    from tests.conftest import test_session
+
+    async with test_session() as session:
+        session.add(
+            MealLog(
+                date=datetime.now(),
+                protein=30.0, fat=20.0, carbs=50.0, calories=500.0,
+                meal_description="サラダチキン", mode="text_only",
+            )
+        )
+        await session.commit()
+
+    with patch(
+        "app.services.meal_processor.analyze_meal_from_text", new_callable=AsyncMock
+    ) as mock_analyze:
+        response = await client.post(
+            "/api/v1/shortcut/meal?meal_type=lunch&description=サラダチキン",
+            headers=api_headers,
+        )
+
+    assert response.status_code == 409
+    mock_analyze.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_meal_log(client, api_headers):
+    """食事ログを削除できる。"""
+    from tests.conftest import test_session
+
+    async with test_session() as session:
+        log = MealLog(
+            date=datetime(2024, 3, 15),
+            protein=25.0, fat=12.0, carbs=40.0, calories=350.0,
+            meal_description="chicken salad", mode="text_only",
+        )
+        session.add(log)
+        await session.commit()
+        log_id = log.id
+
+    response = await client.delete(f"/api/v1/meal/log/{log_id}", headers=api_headers)
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "deleted_id": log_id}
+
+    history = await client.get("/api/v1/meal/history", headers=api_headers)
+    assert history.json() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_meal_log_not_found(client, api_headers):
+    """存在しないIDの削除は404。"""
+    response = await client.delete("/api/v1/meal/log/9999", headers=api_headers)
+    assert response.status_code == 404

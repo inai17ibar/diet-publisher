@@ -159,6 +159,24 @@ async def get_meal_history(
     ]
 
 
+@router.delete("/meal/log/{log_id}")
+async def delete_meal_log(
+    log_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """食事ログを削除（重複記録の修正用）"""
+    log = await session.get(MealLog, log_id)
+    if log is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meal log not found",
+        )
+    await session.delete(log)
+    await session.commit()
+    return {"success": True, "deleted_id": log_id}
+
+
 @router.get("/meal/daily-summary", response_model=list[DailySummaryResponse])
 async def get_daily_summary(
     days: int = Query(30, description="取得する日数"),
