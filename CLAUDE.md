@@ -6,6 +6,13 @@
 
 ChatGPT Diet App - ダイエット記録用のPFC計算、投稿文、投稿用画像を作るWebアプリ。
 
+## 関連システム（重要）
+
+日々の食事記録の本体は別リポジトリ `~/src/diet-mcp`（Fly.io: https://diet-mcp.fly.dev）。
+ChatGPTコネクタ（MCP）で記録され、iOSショートカットがApple ヘルスケアへ同期する。
+本アプリのRailway本番DBに日々の記録は入っていない（2026-07-26時点で0件）。
+全体像は diet-mcp の README「周辺システムとの関係」を参照。
+
 ## 技術スタック
 
 - バックエンド: FastAPI (Python 3.11+)
