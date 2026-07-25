@@ -1,4 +1,4 @@
-# ChatGPT Diet App
+# Diet Publisher (旧 ChatGPT Diet App)
 
 写真と食事内容から、ダイエット記録用の `PFC / カロリー`、投稿文、投稿用画像を作るWebアプリです。  
 投稿用画像は、アップロードした代表写真に `日付 / Day数 / kcal / PFC` を重ねて生成します。

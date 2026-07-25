@@ -4,7 +4,8 @@
 
 ## プロジェクト概要
 
-ChatGPT Diet App - ダイエット記録用のPFC計算、投稿文、投稿用画像を作るWebアプリ。
+Diet Publisher（旧 ChatGPT Diet App）- ダイエット記録用のPFC計算、投稿文、投稿用画像を作るWebアプリ。
+記録データの「発信係」（共有画像生成・SNS投稿）を担う位置づけ。
 
 ## 関連システム（重要）
 
