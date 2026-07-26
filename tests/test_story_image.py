@@ -58,6 +58,16 @@ def test_create_story_image_without_goal_or_nutrients():
         assert img.size == (1080, 1920)
 
 
+def test_pfc_targets_derived_from_calorie_goal():
+    from app.services.story_image import _pfc_targets
+
+    targets = _pfc_targets(2000)
+    assert targets["protein_g"] == 135  # 90kg x 1.5g
+    assert round(targets["fat_g"]) == 56  # 2000 x 25% / 9
+    assert round(targets["carbs_g"]) == 240  # 残りカロリー / 4
+    assert _pfc_targets(None) is None
+
+
 def test_create_story_image_over_goal():
     summary = {**SAMPLE_SUMMARY, "total_calories": 2100.0, "calories_remaining": -300.0}
     data = create_story_image(summary, day_number=402)

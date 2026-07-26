@@ -33,6 +33,23 @@ PFC_COLORS = {
 }
 WEEKDAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
+# PFC目標の逆算パラメータ
+PROTEIN_TARGET_G = 135.0  # 体重90kg × 1.5g/kg 程度
+FAT_KCAL_RATIO = 0.25  # 脂質は目標カロリーの25%
+
+
+def _pfc_targets(goal_kcal: float | None) -> dict[str, float] | None:
+    """目標カロリーからPFCの目標グラム数を逆算する。
+
+    P: 固定(PROTEIN_TARGET_G)、F: 目標カロリーの25%、C: 残りのカロリー。
+    """
+    if goal_kcal is None or goal_kcal <= 0:
+        return None
+    protein = PROTEIN_TARGET_G
+    fat = goal_kcal * FAT_KCAL_RATIO / 9
+    carbs = max((goal_kcal - protein * 4 - fat * 9) / 4, 0)
+    return {"protein_g": protein, "fat_g": fat, "carbs_g": carbs}
+
 _FONT_CANDIDATES = [
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",  # Docker (fonts-noto-cjk)
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -122,7 +139,7 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
     draw.text((MARGIN_X, y), calories_text, font=big_font, fill=TEXT_MAIN)
     unit_x = MARGIN_X + draw.textlength(calories_text, font=big_font) + 24
     draw.text((unit_x, y + 190 - 76), "kcal", font=_font(56), fill=TEXT_SUB)
-    y += 230
+    y += 264
 
     # ---- 目標との比較 + 達成バー ----
     if goal is not None:
@@ -149,7 +166,12 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
         y += 20
 
     # ---- PFC ----
+    targets = _pfc_targets(goal)
     draw.text((MARGIN_X, y), "PFC", font=_font(40), fill=TEXT_SUB)
+    if targets:
+        draw.text(
+            (WIDTH - MARGIN_X, y + 40), "実績 / 目標", font=_font(36), fill=TEXT_SUB, anchor="rs"
+        )
     y += 66
     macro_kcal = {
         "protein_g": (nutrients.get("protein_g") or 0) * 4,
@@ -157,7 +179,7 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
         "carbs_g": (nutrients.get("carbs_g") or 0) * 4,
     }
     macro_total = sum(macro_kcal.values())
-    bar_x = MARGIN_X + 320
+    bar_x = MARGIN_X + 400
     for key, (letter, color) in PFC_COLORS.items():
         badge_r = 30
         cy = y + badge_r
@@ -166,22 +188,44 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
         )
         draw.text((MARGIN_X + badge_r, cy), letter, font=_font(38), fill=BG_TOP, anchor="mm")
         value = nutrients.get(key)
-        grams_label = f"{value:g} g" if value is not None else "—"
-        draw.text((MARGIN_X + 84, cy), grams_label, font=_font(46), fill=TEXT_MAIN, anchor="lm")
+        value_label = f"{value:g}" if value is not None else "—"
         bar_h = 16
         draw.rounded_rectangle(
             [(bar_x, cy - bar_h // 2), (WIDTH - MARGIN_X, cy + bar_h // 2)],
             radius=bar_h // 2,
             fill=TRACK,
         )
-        if macro_total > 0 and macro_kcal[key] > 0:
-            share = macro_kcal[key] / macro_total
-            fill_w = max((WIDTH - MARGIN_X - bar_x) * share, bar_h)
-            draw.rounded_rectangle(
-                [(bar_x, cy - bar_h // 2), (bar_x + fill_w, cy + bar_h // 2)],
-                radius=bar_h // 2,
-                fill=color,
+        bar_full = WIDTH - MARGIN_X - bar_x
+        if targets:
+            # 目標値をバーの全長とし、実績で埋める。超過はアンバーで示す
+            target = targets[key]
+            over = value is not None and target > 0 and value > target
+            grams_label = f"{value_label} / {round(target)} g"
+            label_fill = ACCENT_OVER if over else TEXT_MAIN
+            draw.text(
+                (MARGIN_X + 84, cy), grams_label, font=_font(42), fill=label_fill, anchor="lm"
             )
+            if value and target > 0:
+                ratio = min(value / target, 1.0)
+                fill_w = max(bar_full * ratio, bar_h)
+                draw.rounded_rectangle(
+                    [(bar_x, cy - bar_h // 2), (bar_x + fill_w, cy + bar_h // 2)],
+                    radius=bar_h // 2,
+                    fill=ACCENT_OVER if over else color,
+                )
+        else:
+            # 目標カロリー未設定時はカロリー寄与比で表示
+            draw.text(
+                (MARGIN_X + 84, cy), f"{value_label} g", font=_font(46), fill=TEXT_MAIN, anchor="lm"
+            )
+            if macro_total > 0 and macro_kcal[key] > 0:
+                share = macro_kcal[key] / macro_total
+                fill_w = max(bar_full * share, bar_h)
+                draw.rounded_rectangle(
+                    [(bar_x, cy - bar_h // 2), (bar_x + fill_w, cy + bar_h // 2)],
+                    radius=bar_h // 2,
+                    fill=color,
+                )
         y += 92
     y += 50
 
