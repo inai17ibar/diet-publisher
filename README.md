@@ -152,6 +152,26 @@ Content-Type: application/json
 - `share_image_base64`: 投稿用に編集する代表写真
 - `meals[].image_base64`: 栄養推定用の食事写真
 
+### ストーリー画像（Phase 1・半自動）
+
+```http
+GET /api/v1/story/image
+GET /api/v1/story/image?date=2026-07-26
+Header: X-API-Key: your-secret-key
+```
+
+diet-mcp（食事記録の本体サービス）から当日のサマリを取得し、Instagramストーリー用の1080x1920のJPEG画像を返す。日付省略時はJSTの今日。記録が1件もない日は404。
+
+- 目標カロリー内ならグリーン、超過ならアンバーの配色に自動切替
+- 内容: Day数・日付・合計カロリー・目標との差分バー・PFC内訳・食事リスト
+- ストーリーの上下約250px（InstagramのUIと重なる領域）を避けたレイアウト
+
+#### iOSショートカット「今日の記録画像」の作り方
+
+1. 「URLの内容を取得」: `GET https://chatgpt-diet-app-production.up.railway.app/api/v1/story/image`、ヘッダーに `X-API-Key: <SECRET_KEY>` を追加
+2. 「写真アルバムに保存」: 直前の「URLの内容」をそのまま保存
+3. Instagramのストーリー作成画面で保存した画像を選んで投稿（ここだけ手動）
+
 ## デプロイ
 
 現在の Railway 設定:
@@ -172,6 +192,8 @@ Content-Type: application/json
 | `PORT` | Railway 側で注入される値を利用 | no |
 | `DATABASE_URL` | 外部DBを使う場合のみ | no |
 | `IMAGES_DIR` | 画像保存先。Railwayでは `/data/images` 推奨 | no |
+| `DIET_MCP_URL` | diet-mcpのURL。デフォルト `https://diet-mcp.fly.dev` | no |
+| `DIET_MCP_API_KEY` | diet-mcpのAPIキー（ストーリー画像生成に必須） | yes |
 
 ### Railwayでの永続化
 

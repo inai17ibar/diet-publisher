@@ -39,6 +39,7 @@ images/
 *.db
 *.sqlite
 *.sqlite3
+instagram_session.json
 
 # Logs
 *.log

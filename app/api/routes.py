@@ -2,7 +2,7 @@ import base64
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,9 @@ from app.models.schemas import (
     PostResult,
 )
 from app.services.day_counter import calculate_day_number
+from app.services.diet_mcp_client import DietMcpError, fetch_daily_summary
 from app.services.meal_processor import create_and_post, process_single_meal
+from app.services.story_image import create_story_image
 
 router = APIRouter()
 
@@ -120,6 +122,33 @@ async def shortcut_endpoint(
     )
     result = await create_and_post(daily_input, session, auto_post=auto_post)
     return result
+
+
+@router.get("/story/image")
+async def story_image(
+    date: str | None = Query(None, description="対象日 (YYYY-MM-DD、省略時はJSTの今日)"),
+    _: None = Depends(verify_api_key),
+):
+    """ストーリー投稿用の1日サマリ画像（1080x1920 JPEG）を返す。
+
+    データはdiet-mcpから取得する（読み取り専用）。iOSショートカットから
+    取得して「写真に保存」→手動でストーリーに上げる想定（Phase 1）。
+    """
+    try:
+        summary = await fetch_daily_summary(date)
+    except DietMcpError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    if not summary.get("meals"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="この日の食事記録がありません",
+        )
+
+    target_date = datetime.fromisoformat(summary["date"]).date()
+    day_number = calculate_day_number(target_date)
+    image_bytes = create_story_image(summary, day_number)
+    return Response(content=image_bytes, media_type="image/jpeg")
 
 
 @router.get("/meal/history", response_model=list[MealLogResponse])

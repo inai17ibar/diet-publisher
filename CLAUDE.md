@@ -64,6 +64,8 @@ app/
 | `HOST` | サーバーホスト |
 | `PORT` | サーバーポート |
 | `DATABASE_URL` | 外部DBを使う場合のみ |
+| `DIET_MCP_URL` | diet-mcpのURL（省略時 https://diet-mcp.fly.dev） |
+| `DIET_MCP_API_KEY` | diet-mcpのAPIキー。`GET /api/v1/story/image`（ストーリー画像生成）に必須 |
 
 ## クロスプラットフォーム方針
 

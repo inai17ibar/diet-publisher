@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     diet_start_date: date = date(2025, 6, 20)
 
+    # diet-mcp連携（ストーリー画像の記録データ取得元）
+    diet_mcp_url: str = "https://diet-mcp.fly.dev"
+    diet_mcp_api_key: str = ""
+
     # Paths
     project_root: Path = Path(__file__).resolve().parent.parent
     images_dir: Path | None = None
