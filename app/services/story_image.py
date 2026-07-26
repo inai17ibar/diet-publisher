@@ -76,6 +76,20 @@ def _truncate(draw: ImageDraw.ImageDraw, text: str, font, max_width: float) -> s
     return text + "…"
 
 
+def create_notice_image(lines: list[str]) -> bytes:
+    """データが無いときなどに返す案内用の画像（本編と同じデザイントーン）。"""
+    image = _gradient_background()
+    draw = ImageDraw.Draw(image)
+    font = _font(52)
+    line_h = 84
+    start_y = HEIGHT // 2 - line_h * (len(lines) - 1) // 2
+    for i, line in enumerate(lines):
+        draw.text((WIDTH // 2, start_y + i * line_h), line, font=font, fill=TEXT_SUB, anchor="mm")
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=90)
+    return output.getvalue()
+
+
 def create_story_image(summary: dict, day_number: int | None) -> bytes:
     total = float(summary.get("total_calories") or 0)
     goal = summary.get("calorie_goal")

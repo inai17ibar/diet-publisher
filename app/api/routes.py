@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import MealLog, get_session
+from app.models.database import MealLog, StoryImageLog, get_session
 from app.models.schemas import (
     DailyMealInput,
     DailySummaryResponse,
@@ -21,9 +21,12 @@ from app.models.schemas import (
 from app.services.day_counter import calculate_day_number
 from app.services.diet_mcp_client import DietMcpError, fetch_daily_summary
 from app.services.meal_processor import create_and_post, process_single_meal
-from app.services.story_image import create_story_image
+from app.services.story_image import create_notice_image, create_story_image
 
 router = APIRouter()
+
+JST = timezone(timedelta(hours=9))
+STORY_LOOKBACK_DAYS = 7
 
 
 async def verify_api_key(x_api_key: Annotated[str | None, Header()] = None):
@@ -124,15 +127,26 @@ async def shortcut_endpoint(
     return result
 
 
+async def _record_story_generated(session: AsyncSession, date_str: str) -> None:
+    """ストーリー画像の生成台帳に日付を記録する（記録済みなら何もしない）"""
+    result = await session.execute(
+        select(StoryImageLog.id).where(StoryImageLog.date == date_str)
+    )
+    if result.scalar_one_or_none() is None:
+        session.add(StoryImageLog(date=date_str))
+        await session.commit()
+
+
 @router.get("/story/image")
 async def story_image(
     date: str | None = Query(None, description="対象日 (YYYY-MM-DD、省略時はJSTの今日)"),
+    session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """ストーリー投稿用の1日サマリ画像（1080x1920 JPEG）を返す。
+    """指定日のストーリー画像（1080x1920 JPEG）を返す。
 
-    データはdiet-mcpから取得する（読み取り専用）。iOSショートカットから
-    取得して「写真に保存」→手動でストーリーに上げる想定（Phase 1）。
+    生成済みでも常に作り直す明示指定用。生成台帳には記録するので、
+    /story/next はこの日をスキップするようになる。
     """
     try:
         summary = await fetch_daily_summary(date)
@@ -148,7 +162,62 @@ async def story_image(
     target_date = datetime.fromisoformat(summary["date"]).date()
     day_number = calculate_day_number(target_date)
     image_bytes = create_story_image(summary, day_number)
-    return Response(content=image_bytes, media_type="image/jpeg")
+    await _record_story_generated(session, summary["date"])
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
+        headers={"X-Story-Date": summary["date"], "X-Story-Status": "generated"},
+    )
+
+
+@router.get("/story/next")
+async def story_next(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """まだ画像を作っていない直近日のストーリー画像を返す。
+
+    今日から過去7日を新しい順に見て「食事記録があり、生成台帳に無い日」を
+    最初に見つけたらその画像を生成して返す。全て生成済みまたは記録なしの
+    場合は案内画像を返す（ショートカットが常に画像を保存できるように、
+    エラーJSONではなく画像で返す）。
+    """
+    today = datetime.now(JST).date()
+    candidates = [today - timedelta(days=i) for i in range(STORY_LOOKBACK_DAYS)]
+    result = await session.execute(
+        select(StoryImageLog.date).where(
+            StoryImageLog.date.in_([d.isoformat() for d in candidates])
+        )
+    )
+    generated = set(result.scalars().all())
+
+    for candidate in candidates:
+        date_str = candidate.isoformat()
+        if date_str in generated:
+            continue
+        try:
+            summary = await fetch_daily_summary(date_str)
+        except DietMcpError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        if not summary.get("meals"):
+            continue
+        day_number = calculate_day_number(candidate)
+        image_bytes = create_story_image(summary, day_number)
+        await _record_story_generated(session, date_str)
+        return Response(
+            content=image_bytes,
+            media_type="image/jpeg",
+            headers={"X-Story-Date": date_str, "X-Story-Status": "generated"},
+        )
+
+    notice = create_notice_image(
+        ["新しく作る画像はありません", f"（直近{STORY_LOOKBACK_DAYS}日は生成済みか記録なし）"]
+    )
+    return Response(
+        content=notice,
+        media_type="image/jpeg",
+        headers={"X-Story-Status": "none"},
+    )
 
 
 @router.get("/meal/history", response_model=list[MealLogResponse])

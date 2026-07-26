@@ -155,22 +155,28 @@ Content-Type: application/json
 ### ストーリー画像（Phase 1・半自動）
 
 ```http
-GET /api/v1/story/image
-GET /api/v1/story/image?date=2026-07-26
+GET /api/v1/story/next                      # おすすめ: 未生成の直近日を自動選択
+GET /api/v1/story/image?date=2026-07-26     # 明示指定（生成済みでも作り直す）
 Header: X-API-Key: your-secret-key
 ```
 
-diet-mcp（食事記録の本体サービス）から当日のサマリを取得し、Instagramストーリー用の1080x1920のJPEG画像を返す。日付省略時はJSTの今日。記録が1件もない日は404。
+diet-mcp（食事記録の本体サービス）からサマリを取得し、Instagramストーリー用の1080x1920のJPEG画像を返す。
 
+- `/story/next`: 今日から過去7日を新しい順に見て「食事記録があり、まだ画像を作っていない日」を生成して返す。生成した日はDBの台帳（`story_image_logs`）に記録され、二度作られない。全て生成済み/記録なしの場合はエラーではなく案内画像を返す（ショートカットが常に画像を保存できるように）
+- `/story/image?date=`: 特定日を作り直したいとき用。生成台帳には記録される
 - 目標カロリー内ならグリーン、超過ならアンバーの配色に自動切替
 - 内容: Day数・日付・合計カロリー・目標との差分バー・PFC内訳・食事リスト
 - ストーリーの上下約250px（InstagramのUIと重なる領域）を避けたレイアウト
+- レスポンスヘッダー: `X-Story-Date`（対象日）、`X-Story-Status`（generated / none）
 
-#### iOSショートカット「今日の記録画像」の作り方
+#### iOSショートカット「記録画像を作る」の作り方
 
-1. 「URLの内容を取得」: `GET https://chatgpt-diet-app-production.up.railway.app/api/v1/story/image`、ヘッダーに `X-API-Key: <SECRET_KEY>` を追加
-2. 「写真アルバムに保存」: 直前の「URLの内容」をそのまま保存
-3. Instagramのストーリー作成画面で保存した画像を選んで投稿（ここだけ手動）
+1. 「テキスト」: `https://chatgpt-diet-app-production.up.railway.app/api/v1/story/next` を貼る
+2. 「URLの内容を取得」: URLに上のテキスト変数を指定、方法 GET、ヘッダーに `X-API-Key: <SECRET_KEY>` を追加
+3. 「写真アルバムに保存」: 直前の「URLの内容」をそのまま保存
+4. Instagramのストーリー作成画面で保存した画像を選んで投稿（ここだけ手動）
+
+食事を記録し終えたタイミング（夜）に実行すれば今日の分、翌日に実行すれば前日の分が自動で選ばれる。
 
 ## デプロイ
 

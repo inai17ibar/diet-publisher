@@ -39,6 +39,16 @@ class MealLog(Base):
     mode = Column(String(20), default="text_only")
 
 
+class StoryImageLog(Base):
+    """ストーリー画像の生成台帳。同じ日の画像を二度作らないための記録"""
+
+    __tablename__ = "story_image_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), unique=True, nullable=False)  # YYYY-MM-DD
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # Database engine and session
 engine = create_async_engine(settings.db_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
