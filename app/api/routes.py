@@ -26,7 +26,6 @@ from app.services.story_image import create_notice_image, create_story_image
 router = APIRouter()
 
 JST = timezone(timedelta(hours=9))
-STORY_LOOKBACK_DAYS = 7
 
 
 async def verify_api_key(x_api_key: Annotated[str | None, Header()] = None):
@@ -170,48 +169,53 @@ async def story_image(
     )
 
 
+async def _render_story(session: AsyncSession, target: str) -> Response:
+    summary = await fetch_daily_summary(target)
+    if not summary.get("meals"):
+        return None
+    day_number = calculate_day_number(datetime.fromisoformat(target).date())
+    image_bytes = create_story_image(summary, day_number)
+    await _record_story_generated(session, target)
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
+        headers={"X-Story-Date": target, "X-Story-Status": "generated"},
+    )
+
+
 @router.get("/story/next")
 async def story_next(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """まだ画像を作っていない直近日のストーリー画像を返す。
+    """今日（または昨日）のストーリー画像を返す。
 
-    今日から過去7日を新しい順に見て「食事記録があり、生成台帳に無い日」を
-    最初に見つけたらその画像を生成して返す。全て生成済みまたは記録なしの
-    場合は案内画像を返す（ショートカットが常に画像を保存できるように、
-    エラーJSONではなく画像で返す）。
+    1. 今日に食事記録があれば、常に最新データで今日の画像を生成する
+       （日中に記録が増えるため、生成済みでも作り直す）
+    2. 今日がまだ空なら、昨日に記録があり未生成の場合だけ昨日を生成する
+       （前日の作り忘れ救済。それより過去へはさかのぼらない）
+    3. どちらも無ければ案内画像を返す（ショートカットが常に画像を
+       保存できるように、エラーJSONではなく画像で返す）
     """
     today = datetime.now(JST).date()
-    candidates = [today - timedelta(days=i) for i in range(STORY_LOOKBACK_DAYS)]
-    result = await session.execute(
-        select(StoryImageLog.date).where(
-            StoryImageLog.date.in_([d.isoformat() for d in candidates])
-        )
-    )
-    generated = set(result.scalars().all())
+    try:
+        response = await _render_story(session, today.isoformat())
+        if response is not None:
+            return response
 
-    for candidate in candidates:
-        date_str = candidate.isoformat()
-        if date_str in generated:
-            continue
-        try:
-            summary = await fetch_daily_summary(date_str)
-        except DietMcpError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
-        if not summary.get("meals"):
-            continue
-        day_number = calculate_day_number(candidate)
-        image_bytes = create_story_image(summary, day_number)
-        await _record_story_generated(session, date_str)
-        return Response(
-            content=image_bytes,
-            media_type="image/jpeg",
-            headers={"X-Story-Date": date_str, "X-Story-Status": "generated"},
+        yesterday = (today - timedelta(days=1)).isoformat()
+        result = await session.execute(
+            select(StoryImageLog.id).where(StoryImageLog.date == yesterday)
         )
+        if result.scalar_one_or_none() is None:
+            response = await _render_story(session, yesterday)
+            if response is not None:
+                return response
+    except DietMcpError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     notice = create_notice_image(
-        ["新しく作る画像はありません", f"（直近{STORY_LOOKBACK_DAYS}日は生成済みか記録なし）"]
+        ["新しく作る画像はありません", "（今日の記録がまだ無いか、昨日の分は生成済みです）"]
     )
     return Response(
         content=notice,

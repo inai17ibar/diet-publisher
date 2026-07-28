@@ -160,6 +160,40 @@ async def test_story_next_generates_latest_ungenerated_day(client, api_headers):
 
 
 @pytest.mark.asyncio
+async def test_story_next_always_regenerates_today(client, api_headers):
+    """今日に記録があれば、生成済みでも常に今日を最新データで作り直す。"""
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    yesterday = _yesterday_jst()
+    with patch(
+        "app.api.routes.fetch_daily_summary",
+        side_effect=_fake_fetch_factory({today, yesterday}),
+    ):
+        r1 = await client.get("/api/v1/story/next", headers=api_headers)
+        r2 = await client.get("/api/v1/story/next", headers=api_headers)
+
+    assert r1.headers["x-story-date"] == today
+    assert r2.headers["x-story-date"] == today
+    assert r2.headers["x-story-status"] == "generated"
+
+
+@pytest.mark.asyncio
+async def test_story_next_does_not_dig_past_yesterday(client, api_headers):
+    """一昨日以前に未生成の記録があっても掘り返さない。"""
+    from app.api.routes import JST
+
+    two_days_ago = (datetime.now(JST).date() - timedelta(days=2)).isoformat()
+    with patch(
+        "app.api.routes.fetch_daily_summary",
+        side_effect=_fake_fetch_factory({two_days_ago}),
+    ):
+        response = await client.get("/api/v1/story/next", headers=api_headers)
+
+    assert response.headers["x-story-status"] == "none"
+
+
+@pytest.mark.asyncio
 async def test_explicit_story_image_marks_date_generated(client, api_headers):
     """/story/image で明示生成した日は /story/next でスキップされる。"""
     yesterday = _yesterday_jst()
