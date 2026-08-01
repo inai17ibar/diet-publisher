@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     diet_mcp_url: str = "https://diet-mcp.fly.dev"
     diet_mcp_api_key: str = ""
 
+    # Instagramストーリー自動投稿（Instagram API with Instagram Login）
+    instagram_user_id: str = ""
+    instagram_access_token: str = ""  # 初期の長期トークン。以降はDBに保存・自動更新
+    # Graph APIが画像を取りに来るための公開URL（このアプリ自身のURL）
+    public_base_url: str = "https://chatgpt-diet-app-production.up.railway.app"
+
     # Paths
     project_root: Path = Path(__file__).resolve().parent.parent
     images_dir: Path | None = None

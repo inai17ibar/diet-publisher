@@ -1,14 +1,23 @@
 import base64
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import MealLog, StoryImageLog, get_session
+from app.models.database import (
+    AppSetting,
+    MealLog,
+    StoryImageLog,
+    StoryPostLog,
+    get_session,
+)
 from app.models.schemas import (
     DailyMealInput,
     DailySummaryResponse,
@@ -20,7 +29,13 @@ from app.models.schemas import (
 )
 from app.services.day_counter import calculate_day_number
 from app.services.diet_mcp_client import DietMcpError, fetch_daily_summary
+from app.services.instagram_story import (
+    InstagramStoryError,
+    publish_story,
+    refresh_access_token,
+)
 from app.services.meal_processor import create_and_post, process_single_meal
+from app.services.openai_service import generate_story_advice
 from app.services.story_image import create_notice_image, create_story_image
 
 router = APIRouter()
@@ -160,7 +175,8 @@ async def story_image(
 
     target_date = datetime.fromisoformat(summary["date"]).date()
     day_number = calculate_day_number(target_date)
-    image_bytes = create_story_image(summary, day_number)
+    advice = await _generate_advice_safe(session, summary, day_number)
+    image_bytes = create_story_image(summary, day_number, advice=advice)
     await _record_story_generated(session, summary["date"])
     return Response(
         content=image_bytes,
@@ -169,13 +185,55 @@ async def story_image(
     )
 
 
-async def _render_story(session: AsyncSession, target: str) -> Response:
+async def _get_app_setting(session: AsyncSession, key: str) -> str | None:
+    setting = await session.get(AppSetting, key)
+    return setting.value if setting else None
+
+
+async def _set_app_setting(session: AsyncSession, key: str, value: str) -> None:
+    setting = await session.get(AppSetting, key)
+    if setting is None:
+        session.add(AppSetting(key=key, value=value))
+    else:
+        setting.value = value
+    await session.commit()
+
+
+async def _recent_advices(session: AsyncSession, limit: int = 7) -> list[str]:
+    result = await session.execute(
+        select(StoryPostLog.advice).order_by(StoryPostLog.date.desc()).limit(limit)
+    )
+    return [a for a in result.scalars().all() if a]
+
+
+async def _generate_advice_safe(
+    session: AsyncSession, summary: dict, day_number: int | None
+) -> str | None:
+    """AIコーチの一言を生成する。失敗しても画像生成は止めない。"""
+    try:
+        previous = await _recent_advices(session)
+        return await generate_story_advice(summary, day_number, previous)
+    except Exception:
+        return None
+
+
+async def _build_story(session: AsyncSession, target: str) -> tuple[bytes, str | None] | None:
+    """対象日の画像とAIコーチの一言を作る。記録が無い日はNone。"""
     summary = await fetch_daily_summary(target)
     if not summary.get("meals"):
         return None
     day_number = calculate_day_number(datetime.fromisoformat(target).date())
-    image_bytes = create_story_image(summary, day_number)
+    advice = await _generate_advice_safe(session, summary, day_number)
+    image_bytes = create_story_image(summary, day_number, advice=advice)
     await _record_story_generated(session, target)
+    return image_bytes, advice
+
+
+async def _render_story(session: AsyncSession, target: str) -> Response:
+    built = await _build_story(session, target)
+    if built is None:
+        return None
+    image_bytes, _ = built
     return Response(
         content=image_bytes,
         media_type="image/jpeg",
@@ -222,6 +280,92 @@ async def story_next(
         media_type="image/jpeg",
         headers={"X-Story-Status": "none"},
     )
+
+
+@router.post("/story/publish")
+async def story_publish(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """今日のストーリー画像を生成してInstagramに自動投稿する（毎晩のcron用）。
+
+    同じ日に二度は投稿しない（冪等）。投稿成功のたびにアクセストークンを
+    更新してDBに保存するので、毎日動いている限りトークンは失効しない。
+    """
+    today = datetime.now(JST).date().isoformat()
+    existing = await session.execute(
+        select(StoryPostLog.media_id).where(StoryPostLog.date == today)
+    )
+    posted_media_id = existing.scalar_one_or_none()
+    if posted_media_id is not None:
+        return {"status": "already_posted", "date": today, "media_id": posted_media_id}
+
+    user_id = settings.instagram_user_id
+    token = (
+        await _get_app_setting(session, "instagram_access_token")
+        or settings.instagram_access_token
+    )
+    if not user_id or not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
+        )
+
+    try:
+        built = await _build_story(session, today)
+    except DietMcpError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    if built is None:
+        return {"status": "skipped", "date": today, "reason": "食事記録がありません"}
+    image_bytes, advice = built
+
+    # Graph APIは公開URLから画像を取得するため、推測不能な名前で配信する
+    filename = f"story_{today.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
+    (settings.images_dir / filename).write_bytes(image_bytes)
+    image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
+
+    try:
+        media_id = await publish_story(user_id, token, image_url)
+    except InstagramStoryError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    session.add(StoryPostLog(date=today, media_id=media_id, advice=advice))
+    await session.commit()
+
+    # トークンの延命（失敗しても投稿自体には影響しない）
+    new_token = await refresh_access_token(token)
+    if new_token:
+        await _set_app_setting(session, "instagram_access_token", new_token)
+
+    return {"status": "posted", "date": today, "media_id": media_id, "advice": advice}
+
+
+@router.get("/public/story/{filename}")
+async def public_story_image(filename: str):
+    """Graph APIが画像を取得するための公開配信（推測不能なファイル名で保護）"""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+\.jpg", filename):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    path = settings.images_dir / filename
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+class InstagramTokenRequest(BaseModel):
+    """Instagram長期アクセストークンの登録リクエスト"""
+
+    access_token: str
+
+
+@router.post("/instagram/token")
+async def set_instagram_token(
+    req: InstagramTokenRequest,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """Instagramの長期アクセストークンを保存する（初回セットアップ・手動更新用）"""
+    await _set_app_setting(session, "instagram_access_token", req.access_token)
+    return {"success": True}
 
 
 @router.get("/meal/history", response_model=list[MealLogResponse])

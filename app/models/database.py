@@ -49,6 +49,28 @@ class StoryImageLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class StoryPostLog(Base):
+    """Instagramストーリーへの自動投稿の台帳。同じ日に二度投稿しないための記録"""
+
+    __tablename__ = "story_post_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), unique=True, nullable=False)  # YYYY-MM-DD
+    media_id = Column(String(100), nullable=True)
+    advice = Column(Text, nullable=True)  # 画像に載せたAIコーチの一言
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """キーバリューの設定保存（Instagramアクセストークンの自動更新用など）"""
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # Database engine and session
 engine = create_async_engine(settings.db_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

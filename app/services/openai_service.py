@@ -126,3 +126,54 @@ async def generate_caption(
     caption = re.sub(r"\n?---$", "", caption)
 
     return caption
+
+
+ADVICE_SYSTEM_PROMPT = """あなたはダイエット記録アプリの専属AIコーチです。
+1日の食事記録を見て、ストーリー画像に載せる「今日のひとこと」を1つ作ります。
+
+ルール:
+- 日本語で1文、最大42文字。改行しない。絵文字は使っても1つまで
+- 今日の実際の食事内容や数値（品名・kcal・PFC）に必ず具体的に触れる
+- ありきたりな一般論（「バランスよく食べましょう」等）は禁止
+- 口調は日替わりで変える: 褒める / 軽くツッコむ / 豆知識 / 明日への提案 など
+- 「過去のひとこと」と似た表現・切り口は避けて、毎日違う角度で書く
+- ひとことの本文だけを出力する（カギ括弧や前置きは不要）
+"""
+
+
+async def generate_story_advice(
+    summary: dict,
+    day_number: int | None,
+    previous_advices: list[str] | None = None,
+) -> str:
+    """ストーリー画像に載せるAIコーチの一言を生成する。"""
+    meals_text = "\n".join(
+        f"- {m.get('time', '')} {m.get('description', '')} ({int(m.get('calories') or 0)}kcal)"
+        for m in summary.get("meals", [])
+    )
+    nutrients = summary.get("nutrients") or {}
+    goal = summary.get("calorie_goal")
+    lines = [
+        f"Day {day_number}" if day_number else "",
+        f"合計 {int(summary.get('total_calories') or 0)}kcal"
+        + (f"（目標 {int(goal)}kcal）" if goal else ""),
+        f"P {nutrients.get('protein_g')}g / F {nutrients.get('fat_g')}g"
+        f" / C {nutrients.get('carbs_g')}g",
+        "今日の食事:",
+        meals_text,
+    ]
+    if previous_advices:
+        lines.append("\n過去のひとこと（これらと被らないこと）:")
+        lines.extend(f"- {a}" for a in previous_advices)
+
+    response = await _get_client().chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": ADVICE_SYSTEM_PROMPT},
+            {"role": "user", "content": "\n".join(filter(None, lines))},
+        ],
+        max_tokens=100,
+        temperature=1.1,
+    )
+    advice = response.choices[0].message.content.strip()
+    return advice.strip("「」\"'").splitlines()[0][:60]

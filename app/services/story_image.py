@@ -107,7 +107,28 @@ def create_notice_image(lines: list[str]) -> bytes:
     return output.getvalue()
 
 
-def create_story_image(summary: dict, day_number: int | None) -> bytes:
+def _wrap_text(
+    draw: ImageDraw.ImageDraw, text: str, font, max_width: float, max_lines: int
+) -> list[str]:
+    """テキストを幅に収まるように行分割する（日本語なので文字単位で折り返す）。"""
+    lines: list[str] = []
+    current = ""
+    for ch in text:
+        if draw.textlength(current + ch, font=font) > max_width:
+            lines.append(current)
+            current = ch
+            if len(lines) == max_lines:
+                break
+        else:
+            current += ch
+    if len(lines) < max_lines and current:
+        lines.append(current)
+    elif current:
+        lines[-1] = _truncate(draw, lines[-1] + current, font, max_width)
+    return lines
+
+
+def create_story_image(summary: dict, day_number: int | None, advice: str | None = None) -> bytes:
     total = float(summary.get("total_calories") or 0)
     goal = summary.get("calorie_goal")
     meals = summary.get("meals") or []
@@ -135,11 +156,11 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
 
     # ---- 摂取カロリー ----
     calories_text = f"{int(total):,}"
-    big_font = _font(190)
+    big_font = _font(160)
     draw.text((MARGIN_X, y), calories_text, font=big_font, fill=TEXT_MAIN)
     unit_x = MARGIN_X + draw.textlength(calories_text, font=big_font) + 24
-    draw.text((unit_x, y + 190 - 76), "kcal", font=_font(56), fill=TEXT_SUB)
-    y += 264
+    draw.text((unit_x, y + 160 - 64), "kcal", font=_font(52), fill=TEXT_SUB)
+    y += 204
 
     # ---- 目標との比較 + 達成バー ----
     if goal is not None:
@@ -149,7 +170,7 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
         else:
             goal_label = f"目標 {int(goal):,} kcal ・ {int(-remaining):,} kcal オーバー"
         draw.text((MARGIN_X, y), goal_label, font=_font(44), fill=TEXT_SUB)
-        y += 78
+        y += 62
         bar_h = 20
         draw.rounded_rectangle(
             [(MARGIN_X, y), (WIDTH - MARGIN_X, y + bar_h)], radius=bar_h // 2, fill=TRACK
@@ -161,7 +182,7 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
                 radius=bar_h // 2,
                 fill=accent,
             )
-        y += bar_h + 60
+        y += bar_h + 36
     else:
         y += 20
 
@@ -172,7 +193,7 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
         draw.text(
             (WIDTH - MARGIN_X, y + 40), "実績 / 目標", font=_font(36), fill=TEXT_SUB, anchor="rs"
         )
-    y += 66
+    y += 56
     macro_kcal = {
         "protein_g": (nutrients.get("protein_g") or 0) * 4,
         "fat_g": (nutrients.get("fat_g") or 0) * 9,
@@ -226,16 +247,32 @@ def create_story_image(summary: dict, day_number: int | None) -> bytes:
                     radius=bar_h // 2,
                     fill=color,
                 )
-        y += 92
-    y += 50
+        y += 78
+    y += 24
+
+    # ---- AIコーチの一言 ----
+    if advice:
+        card_font = _font(38)
+        inner_pad = 32
+        lines = _wrap_text(draw, advice, card_font, content_width - inner_pad * 2, max_lines=2)
+        card_h = 20 + 40 + len(lines) * 50 + 20
+        draw.rounded_rectangle(
+            [(MARGIN_X, y), (WIDTH - MARGIN_X, y + card_h)], radius=24, fill=(42, 56, 78)
+        )
+        draw.text((MARGIN_X + inner_pad, y + 18), "AIコーチ", font=_font(30), fill=accent)
+        ty = y + 20 + 40
+        for line in lines:
+            draw.text((MARGIN_X + inner_pad, ty), line, font=card_font, fill=TEXT_MAIN)
+            ty += 50
+        y += card_h + 28
 
     # ---- 食事リスト ----
     draw.text((MARGIN_X, y), "今日の食事", font=_font(40), fill=TEXT_SUB)
     draw.text(
         (WIDTH - MARGIN_X, y + 40), f"{len(meals)}件", font=_font(40), fill=TEXT_SUB, anchor="rs"
     )
-    y += 76
-    row_h = 78
+    y += 72
+    row_h = 72
     max_rows = max((SAFE_BOTTOM - y) // row_h, 1)
     visible = meals if len(meals) <= max_rows else meals[: max_rows - 1]
     desc_x = MARGIN_X + 150

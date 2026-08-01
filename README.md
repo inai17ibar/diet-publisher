@@ -169,6 +169,26 @@ diet-mcp（食事記録の本体サービス）からサマリを取得し、Ins
 - ストーリーの上下約250px（InstagramのUIと重なる領域）を避けたレイアウト
 - レスポンスヘッダー: `X-Story-Date`（対象日）、`X-Story-Status`（generated / none）
 
+### ストーリー自動投稿（Phase 2）
+
+```http
+POST /api/v1/story/publish          # 今日の画像を生成してInstagramストーリーに投稿（冪等・1日1回）
+POST /api/v1/instagram/token        # 長期アクセストークンの登録・手動更新
+GET  /api/v1/public/story/{file}    # Graph APIが画像を取得する公開URL（認証なし・推測不能名）
+```
+
+- 投稿は**Instagram公式Graph API**（Instagram API with Instagram Login）を使用。非公式ライブラリは使わない
+- 画像には**AIコーチの一言**が入る（gpt-4oが当日の実データから生成。過去の一言をプロンプトに渡し、毎日違う切り口になるようにしている）。一言は`/story/next`等の手動生成にも入る
+- `.github/workflows/story-publish.yml` が毎晩 **21:30 / 23:30 JST** に `/story/publish` を叩く（2回目は記録忘れ対策。冪等なので二重投稿しない）。GitHub Secrets に `DIET_PUBLISHER_API_KEY`（= `SECRET_KEY`）が必要
+- アクセストークンは投稿成功のたびに `refresh_access_token` で更新してDBに保存するため、**毎日投稿が動いている限り失効しない**（60日の期限切れ対策）
+
+#### セットアップ（Meta側・初回のみ）
+
+1. Instagramアカウントを**プロアカウント（クリエイター）**に切替（アプリの設定 → アカウントの種類とツール）
+2. [developers.facebook.com](https://developers.facebook.com) でアプリを作成し、製品「**Instagram**」を追加（Instagram API with Instagram Login構成）
+3. 「API setup with Instagram login」の手順で自分のアカウントを接続し、**長期アクセストークン**と**InstagramユーザーID**を取得
+4. Railwayの環境変数に `INSTAGRAM_USER_ID` と `INSTAGRAM_ACCESS_TOKEN` を設定（トークンは後から `POST /api/v1/instagram/token` で差し替えも可能）
+
 #### iOSショートカット「記録画像を作る」の作り方
 
 1. 「テキスト」: `https://chatgpt-diet-app-production.up.railway.app/api/v1/story/next` を貼る
@@ -200,6 +220,9 @@ diet-mcp（食事記録の本体サービス）からサマリを取得し、Ins
 | `IMAGES_DIR` | 画像保存先。Railwayでは `/data/images` 推奨 | no |
 | `DIET_MCP_URL` | diet-mcpのURL。デフォルト `https://diet-mcp.fly.dev` | no |
 | `DIET_MCP_API_KEY` | diet-mcpのAPIキー（ストーリー画像生成に必須） | yes |
+| `INSTAGRAM_USER_ID` | InstagramのユーザーID（ストーリー自動投稿に必須） | no |
+| `INSTAGRAM_ACCESS_TOKEN` | Instagramの長期アクセストークン（初回のみ。以降はDBで自動更新） | no |
+| `PUBLIC_BASE_URL` | このアプリの公開URL。デフォルトはRailway本番URL | no |
 
 ### Railwayでの永続化
 

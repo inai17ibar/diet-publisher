@@ -10,6 +10,17 @@ from PIL import Image
 from app.services.story_image import create_story_image
 
 
+@pytest.fixture(autouse=True)
+def _mock_advice():
+    """AIコーチの一言はOpenAIを呼ぶため、このモジュールでは常にモックする。"""
+    with patch(
+        "app.api.routes.generate_story_advice",
+        new_callable=AsyncMock,
+        return_value="サラダチキン2日連続、タンパク質の勝ちパターンできてる！",
+    ) as mock:
+        yield mock
+
+
 def _meal(time, description, calories, protein=None, fat=None, carbs=None):
     return {
         "id": f"{time}-{description}",
@@ -206,3 +217,116 @@ async def test_explicit_story_image_marks_date_generated(client, api_headers):
     assert r1.status_code == 200
     assert r1.headers["x-story-status"] == "generated"
     assert r2.headers["x-story-status"] == "none"
+
+
+def test_create_story_image_with_advice():
+    """AIコーチの一言カード付きでも正しいサイズで描画できる。"""
+    data = create_story_image(
+        SAMPLE_SUMMARY,
+        day_number=402,
+        advice="サラダチキン2日連続、タンパク質の勝ちパターンできてる！明日は脂質をあと10gだけ絞ろう",
+    )
+    with Image.open(io.BytesIO(data)) as img:
+        assert img.size == (1080, 1920)
+
+
+def _publish_mocks(tmp_path, user_id="12345", token="long-lived-token"):
+    """story/publishテスト用のsettingsモックを作る。"""
+    from unittest.mock import MagicMock
+
+    mock_settings = MagicMock()
+    mock_settings.secret_key = "test-secret"
+    mock_settings.images_dir = tmp_path
+    mock_settings.public_base_url = "http://testserver"
+    mock_settings.instagram_user_id = user_id
+    mock_settings.instagram_access_token = token
+    return mock_settings
+
+
+@pytest.mark.asyncio
+async def test_story_publish_posts_and_is_idempotent(client, api_headers, tmp_path):
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory({today}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="998877"
+        ) as mock_publish,
+        patch("app.api.routes.refresh_access_token", new_callable=AsyncMock, return_value=None),
+    ):
+        r1 = await client.post("/api/v1/story/publish", headers=api_headers)
+        r2 = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert r1.status_code == 200
+    body = r1.json()
+    assert body["status"] == "posted"
+    assert body["media_id"] == "998877"
+    assert body["advice"]
+
+    # 画像が公開ディレクトリに保存され、そのURLがGraph APIに渡っている
+    saved = list(tmp_path.glob("story_*.jpg"))
+    assert len(saved) == 1
+    called_url = mock_publish.call_args.args[2]
+    assert saved[0].name in called_url
+
+    # 2回目は投稿しない
+    assert r2.json()["status"] == "already_posted"
+    assert mock_publish.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_story_publish_skipped_without_meals(client, api_headers, tmp_path):
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory(set()),
+        ),
+    ):
+        response = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert response.json()["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_story_publish_requires_credentials(client, api_headers, tmp_path):
+    with patch("app.api.routes.settings", _publish_mocks(tmp_path, user_id="", token="")):
+        response = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_public_story_serving(client, api_headers, tmp_path):
+    (tmp_path / "story_test_abc.jpg").write_bytes(b"\xff\xd8\xff\xe0fake")
+    with patch("app.api.routes.settings", _publish_mocks(tmp_path)):
+        ok = await client.get("/api/v1/public/story/story_test_abc.jpg")
+        bad_name = await client.get("/api/v1/public/story/..%2Fsecret.txt")
+        missing = await client.get("/api/v1/public/story/story_nope.jpg")
+
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == "image/jpeg"
+    assert bad_name.status_code == 404
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_instagram_token(client, api_headers):
+    response = await client.post(
+        "/api/v1/instagram/token",
+        headers=api_headers,
+        json={"access_token": "new-token"},
+    )
+    assert response.status_code == 200
+
+    from app.api.routes import _get_app_setting
+    from tests.conftest import test_session
+
+    async with test_session() as session:
+        stored = await _get_app_setting(session, "instagram_access_token")
+    assert stored == "new-token"
