@@ -179,7 +179,7 @@ GET  /api/v1/public/story/{file}    # Graph APIが画像を取得する公開URL
 
 - 投稿は**Instagram公式Graph API**（Instagram API with Instagram Login）を使用。非公式ライブラリは使わない
 - 画像には**AIコーチの一言**が入る（gpt-4oが当日の実データから生成。過去の一言をプロンプトに渡し、毎日違う切り口になるようにしている）。一言は`/story/next`等の手動生成にも入る
-- `.github/workflows/story-publish.yml` が毎晩 **21:30 / 23:30 JST** に `/story/publish` を叩く（2回目は記録忘れ対策。冪等なので二重投稿しない）。GitHub Secrets に `DIET_PUBLISHER_API_KEY`（= `SECRET_KEY`）が必要
+- `.github/workflows/story-publish.yml` が **1日6回（7/10/13/16/19/22時 JST）** `/story/publish` を叩き、サーバー側が記録の状態を見て投稿すべき日を選ぶ: ①21時以降で今日に記録があれば今日を投稿 ②今日が未投稿でも、昨日に記録があり未投稿なら昨日を投稿（翌朝入力パターンの救済）。冪等なので何度呼んでも二重投稿しない。GitHub Secrets に `DIET_PUBLISHER_API_KEY`（= `SECRET_KEY`）が必要。認証情報が未設定の間は `not_configured` を返すだけでcronは失敗しない
 - アクセストークンは投稿成功のたびに `refresh_access_token` で更新してDBに保存するため、**毎日投稿が動いている限り失効しない**（60日の期限切れ対策）
 
 #### セットアップ（Meta側・初回のみ）

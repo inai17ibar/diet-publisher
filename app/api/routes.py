@@ -43,6 +43,11 @@ router = APIRouter()
 JST = timezone(timedelta(hours=9))
 
 
+def _now_jst() -> datetime:
+    """現在時刻（JST）。テストで差し替えられるよう関数にしている"""
+    return datetime.now(JST)
+
+
 async def verify_api_key(x_api_key: Annotated[str | None, Header()] = None):
     """APIキー認証"""
     if x_api_key != settings.secret_key:
@@ -287,18 +292,20 @@ async def story_publish(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """今日のストーリー画像を生成してInstagramに自動投稿する（毎晩のcron用）。
+    """記録の状態を見て「投稿すべき日」を選び、ストーリーに自動投稿する（cron用）。
 
+    食事の入力時刻がまちまち（当日夜のことも翌朝のことも）でも取りこぼさない
+    よう、cronは1日に数回動き、毎回この優先順位で判断する:
+    1. 今日: JSTで21時以降、今日に記録があり未投稿なら投稿（当日夜パターン）
+    2. 昨日: 記録があり未投稿なら投稿（翌朝に前日分を入力するパターンの救済）
     同じ日に二度は投稿しない（冪等）。投稿成功のたびにアクセストークンを
-    更新してDBに保存するので、毎日動いている限りトークンは失効しない。
+    更新してDBに保存するので、投稿が動いている限りトークンは失効しない。
     """
-    today = datetime.now(JST).date().isoformat()
-    existing = await session.execute(
-        select(StoryPostLog.media_id).where(StoryPostLog.date == today)
-    )
-    posted_media_id = existing.scalar_one_or_none()
-    if posted_media_id is not None:
-        return {"status": "already_posted", "date": today, "media_id": posted_media_id}
+    now = _now_jst()
+    candidates = []
+    if now.hour >= 21:
+        candidates.append(now.date().isoformat())
+    candidates.append((now.date() - timedelta(days=1)).isoformat())
 
     user_id = settings.instagram_user_id
     token = (
@@ -306,38 +313,48 @@ async def story_publish(
         or settings.instagram_access_token
     )
     if not user_id or not token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
+        # cronから叩かれるため、セットアップ前でもエラーにはしない
+        return {
+            "status": "not_configured",
+            "detail": "INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
+        }
+
+    for target in candidates:
+        existing = await session.execute(
+            select(StoryPostLog.media_id).where(StoryPostLog.date == target)
         )
+        if existing.scalar_one_or_none() is not None:
+            continue
 
-    try:
-        built = await _build_story(session, today)
-    except DietMcpError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
-    if built is None:
-        return {"status": "skipped", "date": today, "reason": "食事記録がありません"}
-    image_bytes, advice = built
+        try:
+            built = await _build_story(session, target)
+        except DietMcpError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        if built is None:
+            continue
+        image_bytes, advice = built
 
-    # Graph APIは公開URLから画像を取得するため、推測不能な名前で配信する
-    filename = f"story_{today.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
-    (settings.images_dir / filename).write_bytes(image_bytes)
-    image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
+        # Graph APIは公開URLから画像を取得するため、推測不能な名前で配信する
+        filename = f"story_{target.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
+        (settings.images_dir / filename).write_bytes(image_bytes)
+        image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
 
-    try:
-        media_id = await publish_story(user_id, token, image_url)
-    except InstagramStoryError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        try:
+            media_id = await publish_story(user_id, token, image_url)
+        except InstagramStoryError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
-    session.add(StoryPostLog(date=today, media_id=media_id, advice=advice))
-    await session.commit()
+        session.add(StoryPostLog(date=target, media_id=media_id, advice=advice))
+        await session.commit()
 
-    # トークンの延命（失敗しても投稿自体には影響しない）
-    new_token = await refresh_access_token(token)
-    if new_token:
-        await _set_app_setting(session, "instagram_access_token", new_token)
+        # トークンの延命（失敗しても投稿自体には影響しない）
+        new_token = await refresh_access_token(token)
+        if new_token:
+            await _set_app_setting(session, "instagram_access_token", new_token)
 
-    return {"status": "posted", "date": today, "media_id": media_id, "advice": advice}
+        return {"status": "posted", "date": target, "media_id": media_id, "advice": advice}
+
+    return {"status": "nothing_to_post", "date": now.date().isoformat()}
 
 
 @router.get("/public/story/{filename}")

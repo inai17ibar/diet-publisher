@@ -243,13 +243,24 @@ def _publish_mocks(tmp_path, user_id="12345", token="long-lived-token"):
     return mock_settings
 
 
+def _fixed_now(hour: int):
+    """JSTの今日のhour時に固定した _now_jst のモックを返す。"""
+    from app.api.routes import JST
+
+    fixed = datetime.now(JST).replace(hour=hour, minute=0, second=0, microsecond=0)
+    return lambda: fixed
+
+
 @pytest.mark.asyncio
-async def test_story_publish_posts_and_is_idempotent(client, api_headers, tmp_path):
+async def test_story_publish_posts_today_at_night_and_is_idempotent(
+    client, api_headers, tmp_path
+):
     from app.api.routes import JST
 
     today = datetime.now(JST).date().isoformat()
     with (
         patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(22)),
         patch(
             "app.api.routes.fetch_daily_summary",
             side_effect=_fake_fetch_factory({today}),
@@ -265,6 +276,7 @@ async def test_story_publish_posts_and_is_idempotent(client, api_headers, tmp_pa
     assert r1.status_code == 200
     body = r1.json()
     assert body["status"] == "posted"
+    assert body["date"] == today
     assert body["media_id"] == "998877"
     assert body["advice"]
 
@@ -275,14 +287,65 @@ async def test_story_publish_posts_and_is_idempotent(client, api_headers, tmp_pa
     assert saved[0].name in called_url
 
     # 2回目は投稿しない
-    assert r2.json()["status"] == "already_posted"
+    assert r2.json()["status"] == "nothing_to_post"
     assert mock_publish.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_story_publish_skipped_without_meals(client, api_headers, tmp_path):
+async def test_story_publish_catches_up_yesterday_in_the_morning(
+    client, api_headers, tmp_path
+):
+    """翌朝に前日分を入力するパターン: 朝のcronで昨日の分が投稿される。"""
+    yesterday = _yesterday_jst()
     with (
         patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(7)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory({yesterday}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="777"
+        ),
+        patch("app.api.routes.refresh_access_token", new_callable=AsyncMock, return_value=None),
+    ):
+        response = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    body = response.json()
+    assert body["status"] == "posted"
+    assert body["date"] == yesterday
+
+
+@pytest.mark.asyncio
+async def test_story_publish_does_not_post_today_before_evening(
+    client, api_headers, tmp_path
+):
+    """昼間は今日の分をまだ投稿しない（夜に記録が増えるため）。"""
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(13)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory({today}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="x"
+        ) as mock_publish,
+    ):
+        response = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert response.json()["status"] == "nothing_to_post"
+    assert mock_publish.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_story_publish_nothing_without_meals(client, api_headers, tmp_path):
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(22)),
         patch(
             "app.api.routes.fetch_daily_summary",
             side_effect=_fake_fetch_factory(set()),
@@ -290,15 +353,17 @@ async def test_story_publish_skipped_without_meals(client, api_headers, tmp_path
     ):
         response = await client.post("/api/v1/story/publish", headers=api_headers)
 
-    assert response.json()["status"] == "skipped"
+    assert response.json()["status"] == "nothing_to_post"
 
 
 @pytest.mark.asyncio
-async def test_story_publish_requires_credentials(client, api_headers, tmp_path):
+async def test_story_publish_not_configured_is_not_an_error(client, api_headers, tmp_path):
+    """認証情報が未設定でもcronが失敗扱いにならないよう200で返す。"""
     with patch("app.api.routes.settings", _publish_mocks(tmp_path, user_id="", token="")):
         response = await client.post("/api/v1/story/publish", headers=api_headers)
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.json()["status"] == "not_configured"
 
 
 @pytest.mark.asyncio

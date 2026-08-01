@@ -2,17 +2,18 @@ name: story-publish
 
 on:
   schedule:
-    # 21:30 JST (12:30 UTC) — 夕食記録後を想定
-    - cron: "30 12 * * *"
-    # 23:30 JST (14:30 UTC) — 1回目に記録が無かった場合の再試行（冪等なので二重投稿はしない）
-    - cron: "30 14 * * *"
+    # JSTで 07:00 / 10:00 / 13:00 / 16:00 / 19:00 / 22:00 の1日6回。
+    # 投稿判断はサーバー側（/story/publish）が記録の状態を見て行うため、
+    # 何度呼んでも二重投稿はしない。食事の入力時刻がまちまちでも、
+    # 当日夜(22時)にも翌朝(7時)にも拾える。
+    - cron: "0 22,1,4,7,10,13 * * *"
   workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Post today's story
+      - name: Post story if there is something to post
         run: |
           curl -sf -X POST \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
