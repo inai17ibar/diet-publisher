@@ -29,7 +29,7 @@ async def test_api_info(client):
     response = await client.get("/api")
     assert response.status_code == 200
     data = response.json()
-    assert "ChatGPT Diet App API" in data["message"]
+    assert "Diet Publisher API" in data["message"]
 
 
 @pytest.mark.asyncio

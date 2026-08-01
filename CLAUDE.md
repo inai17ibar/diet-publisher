@@ -17,7 +17,7 @@ ChatGPTコネクタ（MCP）で記録され、iOSショートカットがApple �
 ## 技術スタック
 
 - バックエンド: FastAPI (Python 3.11+)
-- フロントエンド: Vanilla JS + Chart.js
+- フロントエンド: なし（2026-08-02にSPAを廃止。APIサーバーのみ）
 - データベース: SQLite + SQLAlchemy async
 - AI: OpenAI API
 

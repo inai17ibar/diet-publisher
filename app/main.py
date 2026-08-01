@@ -1,9 +1,8 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.config import settings
@@ -22,9 +21,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ChatGPT Diet App",
-    description="AI-powered diet tracking with share-ready image and post text creation",
-    version="0.1.0",
+    title="Diet Publisher",
+    description="Diet record rendering and Instagram story publishing API",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -46,22 +45,23 @@ async def duplicate_meal_handler(request: Request, exc: DuplicateMealError):
 # ルーター登録
 app.include_router(router, prefix="/api/v1")
 
-# 静的ファイルのディレクトリ
-STATIC_DIR = Path(__file__).parent / "static"
-
 
 @app.get("/")
 async def root():
-    """フロントエンドページを表示"""
-    return FileResponse(STATIC_DIR / "index.html")
+    """APIサーバー情報（フロントエンドは廃止済み）"""
+    return {
+        "message": "Diet Publisher API",
+        "docs": "/docs",
+        "version": "0.2.0",
+    }
 
 
 @app.get("/api")
 async def api_info():
     return {
-        "message": "ChatGPT Diet App API",
+        "message": "Diet Publisher API",
         "docs": "/docs",
-        "version": "0.1.0",
+        "version": "0.2.0",
     }
 
 
