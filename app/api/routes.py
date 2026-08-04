@@ -332,7 +332,9 @@ async def story_publish(
         candidates.append(now.date().isoformat())
     candidates.append((now.date() - timedelta(days=1)).isoformat())
 
-    user_id = settings.instagram_user_id
+    user_id = (
+        await _get_app_setting(session, "instagram_user_id") or settings.instagram_user_id
+    )
     token = (
         await _get_app_setting(session, "instagram_access_token")
         or settings.instagram_access_token
@@ -413,9 +415,10 @@ async def public_story_image(filename: str):
 
 
 class InstagramTokenRequest(BaseModel):
-    """Instagram長期アクセストークンの登録リクエスト"""
+    """Instagram認証情報の登録リクエスト"""
 
     access_token: str
+    user_id: str | None = None
 
 
 @router.post("/instagram/token")
@@ -424,9 +427,14 @@ async def set_instagram_token(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
-    """Instagramの長期アクセストークンを保存する（初回セットアップ・手動更新用）"""
+    """Instagramの認証情報をDBに保存する（初回セットアップ・手動更新用）。
+
+    Railwayの環境変数を使わずにAPIだけでセットアップできる代替経路。
+    """
     await _set_app_setting(session, "instagram_access_token", req.access_token)
-    return {"success": True}
+    if req.user_id:
+        await _set_app_setting(session, "instagram_user_id", req.user_id)
+    return {"success": True, "user_id_saved": bool(req.user_id)}
 
 
 @router.get("/meal/history", response_model=list[MealLogResponse])
