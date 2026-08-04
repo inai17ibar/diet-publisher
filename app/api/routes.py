@@ -414,6 +414,23 @@ async def public_story_image(filename: str):
     return FileResponse(path, media_type="image/jpeg")
 
 
+@router.get("/instagram/status")
+async def instagram_status(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """Instagram連携の設定状態を返す診断用（値そのものは返さない）"""
+    db_user = await _get_app_setting(session, "instagram_user_id")
+    db_token = await _get_app_setting(session, "instagram_access_token")
+    return {
+        "env_user_id_set": bool(settings.instagram_user_id),
+        "env_token_set": bool(settings.instagram_access_token),
+        "env_token_length": len(settings.instagram_access_token or ""),
+        "db_user_id_set": bool(db_user),
+        "db_token_set": bool(db_token),
+    }
+
+
 class InstagramTokenRequest(BaseModel):
     """Instagram認証情報の登録リクエスト"""
 
