@@ -395,3 +395,25 @@ async def test_set_instagram_token(client, api_headers):
     async with test_session() as session:
         stored = await _get_app_setting(session, "instagram_access_token")
     assert stored == "new-token"
+
+
+def test_clean_text_strips_emoji():
+    """フォントで描画できない絵文字・記号は除去される。"""
+    from app.services.story_image import _clean_text
+
+    assert _clean_text("今日もいい感じ🔥💪") == "今日もいい感じ"
+    assert _clean_text("鶏むね⭐️と野菜🥗のスープ") == "鶏むねと野菜のスープ"
+    assert _clean_text("👨‍👩‍👧 家族で外食") == "家族で外食"
+    assert _clean_text("普通のテキスト。P95g!") == "普通のテキスト。P95g!"
+    assert _clean_text(None) == ""
+
+
+def test_create_story_image_with_emoji_advice_and_meals():
+    """絵文字入りの一言・食事名でも文字化けせず描画できる（除去される）。"""
+    summary = {
+        **SAMPLE_SUMMARY,
+        "meals": [_meal("08:00", "オイコス🍨とバナナ🍌", 250.0)],
+    }
+    data = create_story_image(summary, day_number=410, advice="タンパク質順調🔥その調子💪")
+    with Image.open(io.BytesIO(data)) as img:
+        assert img.size == (1080, 1920)

@@ -7,10 +7,29 @@
 
 import io
 import os
+import re
 from datetime import date
 from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
+
+# 描画フォント（Noto CJK / ヒラギノ）に無い絵文字・シンボルは豆腐(□)になるため
+# 描画前に取り除く。ZWJ・異体字セレクタも対象
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001f000-\U0001faff"  # 絵文字ブロック全般
+    "\U00002600-\U000027bf"  # その他の記号・装飾記号
+    "\U00002b00-\U00002bff"  # 矢印・星など
+    "\uFE0F\u200D"  # 異体字セレクタ・ZWJ
+    "]+"
+)
+
+
+def _clean_text(text: str | None) -> str:
+    """フォントで描画できない絵文字類を除去する。"""
+    if not text:
+        return ""
+    return _EMOJI_RE.sub("", text).strip()
 
 WIDTH = 1080
 HEIGHT = 1920
@@ -160,7 +179,7 @@ def create_story_image(summary: dict, day_number: int | None, advice: str | None
     draw.text((MARGIN_X, y), calories_text, font=big_font, fill=TEXT_MAIN)
     unit_x = MARGIN_X + draw.textlength(calories_text, font=big_font) + 24
     draw.text((unit_x, y + 160 - 64), "kcal", font=_font(52), fill=TEXT_SUB)
-    y += 204
+    y += 224
 
     # ---- 目標との比較 + 達成バー ----
     if goal is not None:
@@ -170,7 +189,7 @@ def create_story_image(summary: dict, day_number: int | None, advice: str | None
         else:
             goal_label = f"目標 {int(goal):,} kcal ・ {int(-remaining):,} kcal オーバー"
         draw.text((MARGIN_X, y), goal_label, font=_font(44), fill=TEXT_SUB)
-        y += 62
+        y += 78
         bar_h = 20
         draw.rounded_rectangle(
             [(MARGIN_X, y), (WIDTH - MARGIN_X, y + bar_h)], radius=bar_h // 2, fill=TRACK
@@ -182,7 +201,7 @@ def create_story_image(summary: dict, day_number: int | None, advice: str | None
                 radius=bar_h // 2,
                 fill=accent,
             )
-        y += bar_h + 36
+        y += bar_h + 48
     else:
         y += 20
 
@@ -251,6 +270,7 @@ def create_story_image(summary: dict, day_number: int | None, advice: str | None
     y += 24
 
     # ---- AIコーチの一言 ----
+    advice = _clean_text(advice)
     if advice:
         card_font = _font(38)
         inner_pad = 32
@@ -285,7 +305,7 @@ def create_story_image(summary: dict, day_number: int | None, advice: str | None
         draw.text((WIDTH - MARGIN_X, cy), calories_label, font=cal_font, fill=TEXT_SUB, anchor="rm")
         desc_font = _font(44)
         desc_max_w = (WIDTH - MARGIN_X - cal_w - 40) - desc_x
-        description = _truncate(draw, meal.get("description", ""), desc_font, desc_max_w)
+        description = _truncate(draw, _clean_text(meal.get("description")), desc_font, desc_max_w)
         draw.text((desc_x, cy), description, font=desc_font, fill=TEXT_MAIN, anchor="lm")
         y += row_h
     if len(meals) > len(visible):
