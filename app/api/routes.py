@@ -287,8 +287,33 @@ async def story_next(
     )
 
 
+@router.post("/story/mark-posted")
+async def story_mark_posted(
+    date: str = Query(..., description="投稿済みにする日付 (YYYY-MM-DD)"),
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """指定日を投稿済みとして台帳に記録する（実際の投稿はしない）。
+
+    手動でストーリーに上げてしまった日をcronにスキップさせるための管理用。
+    """
+    try:
+        datetime.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="日付はYYYY-MM-DD形式で指定"
+        )
+    existing = await session.execute(select(StoryPostLog.id).where(StoryPostLog.date == date))
+    if existing.scalar_one_or_none() is not None:
+        return {"status": "already_posted", "date": date}
+    session.add(StoryPostLog(date=date, media_id=None, advice=None))
+    await session.commit()
+    return {"status": "marked", "date": date}
+
+
 @router.post("/story/publish")
 async def story_publish(
+    test: bool = Query(False, description="接続テスト用の特別画像を投稿する（台帳に記録しない）"),
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_api_key),
 ):
@@ -319,9 +344,28 @@ async def story_publish(
             "detail": "INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
         }
 
+    if test:
+        # 接続テスト: 台帳に記録せず、日次画像とは別のテスト画像を投稿する
+        image_bytes = create_notice_image(
+            [
+                "AUTO-POST TEST",
+                now.strftime("%Y.%m.%d %H:%M"),
+                "diet-publisher → Instagram 接続確認",
+            ]
+        )
+        filename = f"story_test_{secrets.token_urlsafe(12)}.jpg"
+        (settings.images_dir / filename).write_bytes(image_bytes)
+        image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
+        try:
+            media_id = await publish_story(user_id, token, image_url)
+        except InstagramStoryError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        return {"status": "test_posted", "media_id": media_id}
+
     for target in candidates:
+        # media_idではなく行の存在で判定する（手動マーク行はmedia_idがNULLのため）
         existing = await session.execute(
-            select(StoryPostLog.media_id).where(StoryPostLog.date == target)
+            select(StoryPostLog.id).where(StoryPostLog.date == target)
         )
         if existing.scalar_one_or_none() is not None:
             continue

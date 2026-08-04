@@ -417,3 +417,54 @@ def test_create_story_image_with_emoji_advice_and_meals():
     data = create_story_image(summary, day_number=410, advice="タンパク質順調🔥その調子💪")
     with Image.open(io.BytesIO(data)) as img:
         assert img.size == (1080, 1920)
+
+
+@pytest.mark.asyncio
+async def test_story_mark_posted_makes_cron_skip(client, api_headers, tmp_path):
+    """手動投稿済みの日をマークすると、cronはその日を投稿しない。"""
+    yesterday = _yesterday_jst()
+    r1 = await client.post(
+        f"/api/v1/story/mark-posted?date={yesterday}", headers=api_headers
+    )
+    assert r1.json()["status"] == "marked"
+
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(7)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory({yesterday}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="x"
+        ) as mock_publish,
+    ):
+        r2 = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert r2.json()["status"] == "nothing_to_post"
+    assert mock_publish.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_story_publish_test_mode_posts_without_ledger(client, api_headers, tmp_path):
+    """test=trueは特別画像を投稿するが台帳には記録しない。"""
+    yesterday = _yesterday_jst()
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(7)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_fake_fetch_factory({yesterday}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="t-1"
+        ) as mock_publish,
+        patch("app.api.routes.refresh_access_token", new_callable=AsyncMock, return_value=None),
+    ):
+        r1 = await client.post("/api/v1/story/publish?test=true", headers=api_headers)
+        r2 = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert r1.json()["status"] == "test_posted"
+    # テスト投稿は台帳に残らないので、通常のcronは昨日分をそのまま投稿できる
+    assert r2.json()["status"] == "posted"
+    assert mock_publish.call_count == 2
