@@ -157,20 +157,24 @@ def create_weekly_image(week: dict, score: WeekScore, comment: str | None = None
     y += 62
 
     # ---- 点数 + グレード ----
+    # 行送りを固定pxにすると、フォント（ローカルのヒラギノ / 本番のNoto CJK）で
+    # 字面の高さが違うぶん次の行と重なる。数字の実寸を測って配置する
     score_text = str(score.total)
     score_font = _font(150)
-    draw.text((MARGIN_X, y), score_text, font=score_font, fill=TEXT_MAIN)
-    unit_x = MARGIN_X + draw.textlength(score_text, font=score_font) + 20
-    draw.text((unit_x, y + 134), "/ 100", font=_font(48), fill=TEXT_SUB, anchor="ls")
+    ink = draw.textbbox((0, 0), score_text, font=score_font)
+    score_h = ink[3] - ink[1]
+    draw.text((MARGIN_X, y - ink[1]), score_text, font=score_font, fill=TEXT_MAIN)
+    unit_x = MARGIN_X + (ink[2] - ink[0]) + 20
+    draw.text((unit_x, y + score_h), "/ 100", font=_font(48), fill=TEXT_SUB, anchor="ls")
     badge_r = 66
     badge_cx = WIDTH - MARGIN_X - badge_r
-    badge_cy = y + 80
+    badge_cy = y + score_h // 2
     draw.ellipse(
         [(badge_cx - badge_r, badge_cy - badge_r), (badge_cx + badge_r, badge_cy + badge_r)],
         fill=accent,
     )
     draw.text((badge_cx, badge_cy), score.grade, font=_font(80), fill=BG_TOP, anchor="mm")
-    y += 172
+    y += score_h + 50
 
     # ---- 目標との差分 ----
     if score.average_calories is not None:
