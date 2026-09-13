@@ -61,6 +61,19 @@ class StoryPostLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class WeeklyPostLog(Base):
+    """週次振り返り投稿の台帳。同じ週に二度投稿しないための記録"""
+
+    __tablename__ = "weekly_post_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    week_start = Column(String(10), unique=True, nullable=False)  # 週の月曜 YYYY-MM-DD
+    media_id = Column(String(100), nullable=True)
+    score = Column(Integer, nullable=True)
+    comment = Column(Text, nullable=True)  # 画像に載せた改善ポイント
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AppSetting(Base):
     """キーバリューの設定保存（Instagramアクセストークンの自動更新用など）"""
 

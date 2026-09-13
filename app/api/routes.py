@@ -1,7 +1,7 @@
 import base64
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -16,6 +16,7 @@ from app.models.database import (
     MealLog,
     StoryImageLog,
     StoryPostLog,
+    WeeklyPostLog,
     get_session,
 )
 from app.models.schemas import (
@@ -28,15 +29,22 @@ from app.models.schemas import (
     PostResult,
 )
 from app.services.day_counter import calculate_day_number
-from app.services.diet_mcp_client import DietMcpError, fetch_daily_summary
+from app.services.diet_mcp_client import (
+    DietMcpError,
+    fetch_daily_summary,
+    fetch_week_summary,
+)
 from app.services.instagram_story import (
     InstagramStoryError,
     publish_story,
     refresh_access_token,
 )
 from app.services.meal_processor import create_and_post, process_single_meal
-from app.services.openai_service import generate_story_advice
+from app.services.meal_slots import missing_label, missing_meal_slots
+from app.services.openai_service import generate_story_advice, generate_weekly_review
 from app.services.story_image import create_notice_image, create_story_image
+from app.services.weekly_image import create_weekly_image
+from app.services.weekly_review import MIN_RECORDED_DAYS, WeekScore, score_week
 
 router = APIRouter()
 
@@ -222,9 +230,15 @@ async def _generate_advice_safe(
         return None
 
 
-async def _build_story(session: AsyncSession, target: str) -> tuple[bytes, str | None] | None:
-    """対象日の画像とAIコーチの一言を作る。記録が無い日はNone。"""
-    summary = await fetch_daily_summary(target)
+async def _build_story(
+    session: AsyncSession, target: str, summary: dict | None = None
+) -> tuple[bytes, str | None] | None:
+    """対象日の画像とAIコーチの一言を作る。記録が無い日はNone。
+
+    summaryを渡すと再取得しない（投稿判断で取得済みの場合に使う）。
+    """
+    if summary is None:
+        summary = await fetch_daily_summary(target)
     if not summary.get("meals"):
         return None
     day_number = calculate_day_number(datetime.fromisoformat(target).date())
@@ -364,6 +378,7 @@ async def story_publish(
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         return {"status": "test_posted", "media_id": media_id}
 
+    incomplete: list[dict] = []
     for target in candidates:
         # media_idではなく行の存在で判定する（手動マーク行はmedia_idがNULLのため）
         existing = await session.execute(
@@ -373,9 +388,20 @@ async def story_publish(
             continue
 
         try:
-            built = await _build_story(session, target)
+            summary = await fetch_daily_summary(target)
         except DietMcpError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        if not summary.get("meals"):
+            continue
+
+        # 朝だけ・朝昼だけの日は1日の記録として不完全なので投稿しない。
+        # 台帳には残さないので、後から残りの食事を記録すれば次のcronで投稿される
+        missing = missing_meal_slots(summary["meals"])
+        if missing:
+            incomplete.append({"date": target, "missing": missing})
+            continue
+
+        built = await _build_story(session, target, summary=summary)
         if built is None:
             continue
         image_bytes, advice = built
@@ -400,7 +426,192 @@ async def story_publish(
 
         return {"status": "posted", "date": target, "media_id": media_id, "advice": advice}
 
+    if incomplete:
+        return {
+            "status": "incomplete",
+            "detail": "3食そろっていないため投稿を見送りました",
+            "skipped": [
+                {**item, "missing_label": missing_label(item["missing"])} for item in incomplete
+            ],
+        }
     return {"status": "nothing_to_post", "date": now.date().isoformat()}
+
+
+def _week_start(target: date) -> str:
+    """その日を含む週の月曜（diet-mcpの週の区切りに合わせる）。"""
+    return (target - timedelta(days=target.weekday())).isoformat()
+
+
+async def _recent_weekly_comments(session: AsyncSession, limit: int = 4) -> list[str]:
+    result = await session.execute(
+        select(WeeklyPostLog.comment).order_by(WeeklyPostLog.week_start.desc()).limit(limit)
+    )
+    return [c for c in result.scalars().all() if c]
+
+
+async def _generate_weekly_comment_safe(
+    session: AsyncSession, week: dict, score: WeekScore
+) -> str | None:
+    """改善ポイントを生成する。失敗しても画像生成は止めない。"""
+    try:
+        previous = await _recent_weekly_comments(session)
+        return await generate_weekly_review(week, score, previous)
+    except Exception:
+        return None
+
+
+async def _build_weekly_story(
+    session: AsyncSession, week_start: str, week: dict | None = None
+) -> tuple[bytes, WeekScore, str | None, dict]:
+    """指定した週の振り返り画像・採点・改善ポイントを作る。
+
+    weekを渡すと再取得しない（投稿判断で取得済みの場合に使う）。
+    """
+    if week is None:
+        week = await fetch_week_summary(week_start)
+    score = score_week(week)
+    comment = await _generate_weekly_comment_safe(session, week, score)
+    return create_weekly_image(week, score, comment=comment), score, comment, week
+
+
+@router.get("/story/weekly-image")
+async def weekly_story_image(
+    date_str: str | None = Query(
+        None, alias="date", description="週に含まれる任意の日 (YYYY-MM-DD、省略時はJSTの今日)"
+    ),
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """指定した週の振り返り画像（1080x1920 JPEG）を返す。手動投稿・確認用。
+
+    自動投稿と違って記録日数のしきい値は見ない（少ない週でも確認できるように）。
+    """
+    target = datetime.fromisoformat(date_str).date() if date_str else _now_jst().date()
+    week_start = _week_start(target)
+    try:
+        week = await fetch_week_summary(week_start)
+    except DietMcpError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    if score_week(week).recorded_days == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="この週の食事記録がありません",
+        )
+
+    image_bytes, score, _comment, week = await _build_weekly_story(
+        session, week_start, week=week
+    )
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
+        headers={
+            "X-Week-Start": week["start_date"],
+            "X-Week-End": week["end_date"],
+            "X-Week-Score": str(score.total),
+        },
+    )
+
+
+@router.post("/story/publish-weekly")
+async def story_publish_weekly(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_api_key),
+):
+    """1週間の振り返りをストーリーに自動投稿する（cron用・冪等）。
+
+    日次と同じく状態駆動で、cronは1日に何度呼んでもよい:
+    1. 日曜のJST21時以降なら、終わろうとしている「今週」を投稿
+    2. それ以外は「先週」が未投稿なら投稿（日曜の投稿を取りこぼした場合の救済）
+    記録が MIN_RECORDED_DAYS 日未満の週は、振り返りとして成立しないので投稿しない。
+    """
+    now = _now_jst()
+    today = now.date()
+    this_week = _week_start(today)
+    last_week = _week_start(today - timedelta(days=7))
+
+    candidates = []
+    if today.weekday() == 6 and now.hour >= 21:  # 日曜の夜
+        candidates.append(this_week)
+    candidates.append(last_week)
+
+    user_id = (
+        await _get_app_setting(session, "instagram_user_id") or settings.instagram_user_id
+    )
+    token = (
+        await _get_app_setting(session, "instagram_access_token")
+        or settings.instagram_access_token
+    )
+    if not user_id or not token:
+        return {
+            "status": "not_configured",
+            "detail": "INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
+        }
+
+    too_few: list[dict] = []
+    for week_start in candidates:
+        existing = await session.execute(
+            select(WeeklyPostLog.id).where(WeeklyPostLog.week_start == week_start)
+        )
+        if existing.scalar_one_or_none() is not None:
+            continue
+
+        try:
+            week = await fetch_week_summary(week_start)
+        except DietMcpError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+        # 画像生成とAI呼び出しの前に、投稿する価値がある週かを先に判断する
+        recorded_days = score_week(week).recorded_days
+        if recorded_days == 0:
+            continue
+        if recorded_days < MIN_RECORDED_DAYS:
+            too_few.append({"week_start": week_start, "recorded_days": recorded_days})
+            continue
+
+        image_bytes, score, comment, _week = await _build_weekly_story(
+            session, week_start, week=week
+        )
+
+        filename = f"weekly_{week_start.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
+        (settings.images_dir / filename).write_bytes(image_bytes)
+        image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
+
+        try:
+            media_id = await publish_story(user_id, token, image_url)
+        except InstagramStoryError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+        session.add(
+            WeeklyPostLog(
+                week_start=week_start,
+                media_id=media_id,
+                score=score.total,
+                comment=comment,
+            )
+        )
+        await session.commit()
+
+        new_token = await refresh_access_token(token)
+        if new_token:
+            await _set_app_setting(session, "instagram_access_token", new_token)
+
+        return {
+            "status": "posted",
+            "week_start": week_start,
+            "media_id": media_id,
+            "score": score.total,
+            "grade": score.grade,
+            "comment": comment,
+        }
+
+    if too_few:
+        return {
+            "status": "too_few_records",
+            "detail": f"記録が{MIN_RECORDED_DAYS}日未満の週は投稿しません",
+            "skipped": too_few,
+        }
+    return {"status": "nothing_to_post", "week_start": this_week}
 
 
 @router.get("/public/story/{filename}")

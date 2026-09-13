@@ -6,12 +6,16 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.models.schemas import PFCData
+from app.services.meal_slots import missing_label, missing_meal_slots
+from app.services.weekly_review import WeekScore
 
 def _get_client() -> AsyncOpenAI:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY が未設定です")
     return AsyncOpenAI(api_key=settings.openai_api_key)
 
+
+WEEKDAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"]
 
 SYSTEM_PROMPT_PFC = """あなたは栄養管理の専門家です。
 ユーザーが提供する食事情報からPFC（タンパク質・脂質・炭水化物）とカロリーを推定してください。
@@ -178,3 +182,73 @@ async def generate_story_advice(
     )
     advice = response.choices[0].message.content.strip()
     return advice.strip("「」\"'").splitlines()[0][:60]
+
+
+WEEKLY_REVIEW_SYSTEM_PROMPT = """あなたはダイエット記録アプリの専属AIコーチです。
+1週間の記録を見て、Instagramに載せる週次振り返り画像の「来週の改善ポイント」を書きます。
+
+ルール:
+- 日本語で2文。合計70文字以内。改行しない
+- 絵文字・特殊記号は使わない（画像のフォントで表示できず文字化けするため）
+- 1文目はその週で一番効いた問題（または良かった点）、2文目は来週すぐ実行できる具体的な改善策
+- 曜日の傾向・数値・記録が抜けた日など、その週の実データに必ず触れる
+- ありきたりな一般論（「バランスよく食べましょう」等）は禁止
+- 「過去の改善ポイント」と同じ切り口の繰り返しは避ける
+- 本文だけを出力する（カギ括弧や前置きは不要）
+"""
+
+
+async def generate_weekly_review(
+    week: dict,
+    score: WeekScore,
+    previous_comments: list[str] | None = None,
+) -> str:
+    """週次振り返り画像に載せる「来週の改善ポイント」を生成する。
+
+    点数や差分はweekly_review側で決定的に計算済みなので、AIには
+    その結果を渡して講評だけを書かせる（数字をAIに作らせない）。
+    """
+    day_lines = []
+    for i, day in enumerate(week.get("daily") or []):
+        label = WEEKDAY_LABELS[i] if i < len(WEEKDAY_LABELS) else day.get("date", "")
+        if not day.get("meals"):
+            day_lines.append(f"- {label} 記録なし")
+            continue
+        nutrients = day.get("nutrients") or {}
+        missing = missing_meal_slots(day["meals"])
+        slot_note = f" / {missing_label(missing)}の記録なし" if missing else " / 3食記録"
+        day_lines.append(
+            f"- {label} {int(day.get('total_calories') or 0)}kcal"
+            f" (P{nutrients.get('protein_g')}g){slot_note}"
+        )
+
+    lines = [
+        f"期間: {week.get('start_date')} 〜 {week.get('end_date')}",
+        f"今週のスコア: {score.total}点 ({score.grade})",
+        *[f"- {item.label}: {item.detail}" for item in score.items],
+    ]
+    if score.average_calories is not None:
+        goal_note = (
+            f"（目標 {int(score.calorie_goal)}kcal / 差 {int(score.average_diff):+d}kcal）"
+            if score.average_diff is not None
+            else ""
+        )
+        lines.append(f"1日平均: {int(score.average_calories)}kcal{goal_note}")
+    lines.append("日別:")
+    lines.extend(day_lines)
+    if previous_comments:
+        lines.append("\n過去の改善ポイント（同じ切り口を繰り返さないこと）:")
+        lines.extend(f"- {c}" for c in previous_comments)
+
+    response = await _get_client().chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": WEEKLY_REVIEW_SYSTEM_PROMPT},
+            {"role": "user", "content": "\n".join(lines)},
+        ],
+        max_tokens=200,
+        temperature=1.0,
+    )
+    comment = response.choices[0].message.content.strip()
+    # 画像のカードは3行（約72文字）まで。それを超える分は描画時に省略される
+    return comment.strip("「」\"'").replace("\n", " ")[:72]

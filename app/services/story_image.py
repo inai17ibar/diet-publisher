@@ -126,20 +126,48 @@ def create_notice_image(lines: list[str]) -> bytes:
     return output.getvalue()
 
 
+# 行頭に来てはいけない文字（禁則処理）。はみ出させてでも前の行にぶら下げる
+_NO_LINE_START = "。、，．）」』】〉》”’!?！？・：；:;ー"
+
+# 英数字のまとまり（"600kcal" など）。途中で改行すると読めなくなるので1単位で扱う
+_WORD_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z,.'%+-]*")
+
+
+def _wrap_units(text: str) -> list[str]:
+    """折り返しの単位に分ける。日本語は1文字ずつ、英数字は単語ごと。"""
+    units: list[str] = []
+    i = 0
+    while i < len(text):
+        match = _WORD_RE.match(text, i)
+        if match:
+            units.append(match.group())
+            i = match.end()
+        else:
+            units.append(text[i])
+            i += 1
+    return units
+
+
 def _wrap_text(
     draw: ImageDraw.ImageDraw, text: str, font, max_width: float, max_lines: int
 ) -> list[str]:
     """テキストを幅に収まるように行分割する（日本語なので文字単位で折り返す）。"""
     lines: list[str] = []
     current = ""
-    for ch in text:
-        if draw.textlength(current + ch, font=font) > max_width:
+    for unit in _wrap_units(text):
+        if draw.textlength(current + unit, font=font) > max_width:
+            if not current:
+                current = unit  # 1単位で幅を超える場合ははみ出させる
+                continue
+            if len(unit) == 1 and unit in _NO_LINE_START:
+                current += unit  # 句読点だけを次の行の頭に送らない
+                continue
             lines.append(current)
-            current = ch
+            current = unit
             if len(lines) == max_lines:
                 break
         else:
-            current += ch
+            current += unit
     if len(lines) < max_lines and current:
         lines.append(current)
     elif current:

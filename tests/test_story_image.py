@@ -341,6 +341,99 @@ async def test_story_publish_does_not_post_today_before_evening(
     assert mock_publish.call_count == 0
 
 
+def _partial_day_fetch_factory(date_to_meals: dict):
+    """日付ごとに好きな食事リストを返す fetch_daily_summary のモック。"""
+
+    async def fake(date_str=None):
+        meals = date_to_meals.get(date_str)
+        if meals:
+            return {**SAMPLE_SUMMARY, "date": date_str, "meals": meals}
+        return {"date": date_str or "2026-01-01", "total_calories": 0, "nutrients": {}, "meals": []}
+
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_story_publish_skips_day_missing_meals(client, api_headers, tmp_path):
+    """朝昼だけの日はストーリーに投稿しない（1日の記録として不完全なため）。"""
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    breakfast_and_lunch = [
+        _meal("08:00", "バナナとヨーグルト", 250.0, 10, 5, 40),
+        _meal("12:30", "サラダチキンと玄米おにぎり", 500.0, 45, 10, 60),
+    ]
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(22)),
+        patch(
+            "app.api.routes.fetch_daily_summary",
+            side_effect=_partial_day_fetch_factory({today: breakfast_and_lunch}),
+        ),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="x"
+        ) as mock_publish,
+    ):
+        response = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    body = response.json()
+    assert body["status"] == "incomplete"
+    assert body["skipped"][0]["date"] == today
+    assert body["skipped"][0]["missing"] == ["dinner"]
+    assert body["skipped"][0]["missing_label"] == "夜"
+    assert mock_publish.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_story_publish_posts_once_the_missing_meal_arrives(
+    client, api_headers, tmp_path
+):
+    """見送った日でも台帳には残らないので、夜を記録すれば次のcronで投稿される。"""
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    meals = [
+        _meal("08:00", "バナナとヨーグルト", 250.0, 10, 5, 40),
+        _meal("12:30", "サラダチキンと玄米おにぎり", 500.0, 45, 10, 60),
+    ]
+    fetch = _partial_day_fetch_factory({today: meals})
+    with (
+        patch("app.api.routes.settings", _publish_mocks(tmp_path)),
+        patch("app.api.routes._now_jst", _fixed_now(22)),
+        patch("app.api.routes.fetch_daily_summary", side_effect=fetch),
+        patch(
+            "app.api.routes.publish_story", new_callable=AsyncMock, return_value="555"
+        ) as mock_publish,
+        patch("app.api.routes.refresh_access_token", new_callable=AsyncMock, return_value=None),
+    ):
+        first = await client.post("/api/v1/story/publish", headers=api_headers)
+        meals.append(_meal("19:00", "豚しゃぶ定食", 700.0, 40, 25, 60))
+        second = await client.post("/api/v1/story/publish", headers=api_headers)
+
+    assert first.json()["status"] == "incomplete"
+    assert second.json()["status"] == "posted"
+    assert second.json()["date"] == today
+    assert mock_publish.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_story_next_still_generates_for_incomplete_day(client, api_headers):
+    """手動生成（iOSショートカット）は3食そろっていなくても画像を返す。"""
+    from app.api.routes import JST
+
+    today = datetime.now(JST).date().isoformat()
+    with patch(
+        "app.api.routes.fetch_daily_summary",
+        side_effect=_partial_day_fetch_factory(
+            {today: [_meal("08:00", "バナナとヨーグルト", 250.0)]}
+        ),
+    ):
+        response = await client.get("/api/v1/story/next", headers=api_headers)
+
+    assert response.headers["x-story-status"] == "generated"
+    assert response.headers["x-story-date"] == today
+
+
 @pytest.mark.asyncio
 async def test_story_publish_nothing_without_meals(client, api_headers, tmp_path):
     with (
@@ -395,6 +488,39 @@ async def test_set_instagram_token(client, api_headers):
     async with test_session() as session:
         stored = await _get_app_setting(session, "instagram_access_token")
     assert stored == "new-token"
+
+
+def test_wrap_text_does_not_start_a_line_with_punctuation():
+    """禁則処理: 句読点や閉じ括弧だけが次の行の頭に送られない。"""
+    from PIL import Image, ImageDraw
+
+    from app.services.story_image import _font, _wrap_text
+
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    font = _font(36)
+    text = "火木の外食で2000kcal超え。土曜は記録も抜けた。来週は昼を固定しよう。"
+    width = draw.textlength("あ" * 12, font=font)
+    lines = _wrap_text(draw, text, font, width, max_lines=4)
+
+    assert len(lines) > 1
+    assert all(line[0] not in "。、）」" for line in lines)
+
+
+def test_wrap_text_keeps_alphanumeric_words_together():
+    """"600kcal" のような英数字のまとまりが行またぎで割れない。"""
+    from PIL import Image, ImageDraw
+
+    from app.services.story_image import _font, _wrap_text
+
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    font = _font(34)
+    text = "来週は外食の日だけ昼を600kcalに固定しよう。木曜は2250kcalだった。"
+    width = draw.textlength("あ" * 10, font=font)
+    lines = _wrap_text(draw, text, font, width, max_lines=6)
+
+    assert len(lines) > 1
+    assert all("kcal" in line for line in lines if "kca" in line)
+    assert "600kcal" in "".join(lines)
 
 
 def test_clean_text_strips_emoji():

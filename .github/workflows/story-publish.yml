@@ -18,3 +18,11 @@ jobs:
           curl -sf -X POST \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish"
+
+      # 週次振り返りも同じcronに相乗りさせる。投稿すべき週かどうかは
+      # サーバー側が判断する（日曜21時以降に今週分、以降は先週分の救済）
+      - name: Post weekly review if the week is done
+        run: |
+          curl -sf -X POST \
+            -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
+            "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish-weekly"

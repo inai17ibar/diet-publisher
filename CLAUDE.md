@@ -38,13 +38,25 @@ app/
 ├── config.py
 ├── api/routes.py
 ├── models/
-├── services/
-│   ├── day_counter.py
-│   ├── image_editor.py
-│   ├── meal_processor.py
-│   └── openai_service.py
-└── static/index.html
+└── services/
+    ├── day_counter.py
+    ├── diet_mcp_client.py   # diet-mcpの読み取りAPI（日次 / 週次）
+    ├── image_editor.py
+    ├── instagram_story.py
+    ├── meal_processor.py
+    ├── meal_slots.py        # 朝/昼/夜の判定（3食そろった日だけ投稿する門番）
+    ├── openai_service.py
+    ├── story_image.py       # 日次のストーリー画像
+    ├── weekly_image.py      # 週次振り返りの画像
+    └── weekly_review.py     # 週次の採点（点数はAIでなくPythonで決定的に計算）
 ```
+
+## 投稿まわりの前提（変更時に壊さないこと）
+
+- 自動投稿は**冪等**。cronが1日6回叩く前提で、投稿済みは台帳（`story_post_logs` / `weekly_post_logs`）で判定する
+- 日次の自動投稿は**3食そろった日だけ**。判定は `app/services/meal_slots.py`。手動生成（`/story/next`・`/story/image`・`/story/weekly-image`）はこの制限を受けない
+- 認証情報が未設定でもcronを失敗させない（`not_configured` を200で返す）
+- 点数・差分などの数値はPython側で計算し、AIには文章だけ書かせる
 
 ## デプロイ
 
