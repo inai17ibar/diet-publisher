@@ -15,16 +15,23 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # RailwayのServerless(スリープ)を有効にしているため、最初の1発は
+      # コールドスタートを踏む。起動待ちで落とさないようリトライと長めの
+      # タイムアウトを付ける。両エンドポイントとも冪等なので再送して安全。
       - name: Post story if there is something to post
         run: |
-          curl -sf -X POST \
+          curl -sS --fail -X POST \
+            --max-time 180 --retry 3 --retry-delay 10 --retry-connrefused \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish"
+          echo
 
       # 週次振り返りも同じcronに相乗りさせる。投稿すべき週かどうかは
-      # サーバー側が判断する（日曜21時以降に今週分、以降は先週分の救済）
+      # サーバー側が判断する（日曜の3食がそろった週だけ投稿する）
       - name: Post weekly review if the week is done
         run: |
-          curl -sf -X POST \
+          curl -sS --fail -X POST \
+            --max-time 180 --retry 3 --retry-delay 10 --retry-connrefused \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish-weekly"
+          echo
