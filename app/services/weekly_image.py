@@ -32,7 +32,7 @@ from app.services.story_image import (
 from app.services.weekly_review import WeekScore
 
 CARD_BG = (42, 56, 78)
-CHART_HEIGHT = 220
+CHART_HEIGHT = 250
 # 棒の上に数値ラベルを置くぶん、棒自体はグラフ枠より少し低くする
 CHART_LABEL_SPACE = 34
 BAR_WIDTH = 100
@@ -115,19 +115,35 @@ def _draw_calorie_chart(
 def _draw_score_breakdown(
     draw: ImageDraw.ImageDraw, score: WeekScore, top: int, accent
 ) -> int:
-    """スコアの内訳（記録・目標カロリー・タンパク質）を細いバーで並べる。"""
+    """スコアの内訳を細いバーで並べる。
+
+    カロリーは加点にも減点にもなるので、中央を0点としてプラスは右（グリーン）、
+    マイナスは左（アンバー）へ伸ばす。加点のみの項目は左端から伸ばす。
+    """
     y = top
     row_h = 70
     bar_x = MARGIN_X + 230
-    bar_right = MARGIN_X + 576
+    bar_right = MARGIN_X + 520
+    bar_h = 14
     for item in score.items:
         cy = y + row_h // 2
         draw.text((MARGIN_X, cy), item.label, font=_font(38), fill=TEXT_MAIN, anchor="lm")
-        bar_h = 14
         draw.rounded_rectangle(
             [(bar_x, cy - bar_h // 2), (bar_right, cy + bar_h // 2)], radius=bar_h // 2, fill=TRACK
         )
-        if item.ratio > 0:
+        if item.signed:
+            center = (bar_x + bar_right) / 2
+            half = (bar_right - bar_x) / 2
+            draw.line([(center, cy - 16), (center, cy + 16)], fill=TEXT_SUB, width=2)
+            if item.ratio:
+                end = center + half * max(-1.0, min(1.0, item.ratio))
+                left, right = sorted((center, end))
+                draw.rounded_rectangle(
+                    [(left, cy - bar_h // 2), (max(right, left + bar_h), cy + bar_h // 2)],
+                    radius=bar_h // 2,
+                    fill=ACCENT_OK if item.points > 0 else ACCENT_OVER,
+                )
+        elif item.ratio > 0:
             fill_w = max((bar_right - bar_x) * item.ratio, bar_h)
             draw.rounded_rectangle(
                 [(bar_x, cy - bar_h // 2), (bar_x + fill_w, cy + bar_h // 2)],

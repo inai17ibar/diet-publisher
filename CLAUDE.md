@@ -54,7 +54,8 @@ app/
 ## 投稿まわりの前提（変更時に壊さないこと）
 
 - 自動投稿は**冪等**。cronが1日6回叩く前提で、投稿済みは台帳（`story_post_logs` / `weekly_post_logs`）で判定する
-- 日次の自動投稿は**3食そろった日だけ**。判定は `app/services/meal_slots.py`。手動生成（`/story/next`・`/story/image`・`/story/weekly-image`）はこの制限を受けない
+- 日次の自動投稿は**3食そろった日だけ**、週次の自動投稿は**日曜の3食がそろった週だけ**（日曜まで記録が入ったことを週が締まった合図とみなす）。判定は `app/services/meal_slots.py` と `weekly_review.is_week_ready`。手動生成（`/story/next`・`/story/image`・`/story/weekly-image`）はこの制限を受けない
+- 週次の点数は「基準点 + カロリーの増減 + タンパク質の加点」。カロリーは目標を下回れば加点・超えれば減点で、記録の有無は採点しない
 - 認証情報が未設定でもcronを失敗させない（`not_configured` を200で返す）
 - 点数・差分などの数値はPython側で計算し、AIには文章だけ書かせる
 

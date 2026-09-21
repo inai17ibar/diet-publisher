@@ -44,7 +44,12 @@ from app.services.meal_slots import missing_label, missing_meal_slots
 from app.services.openai_service import generate_story_advice, generate_weekly_review
 from app.services.story_image import create_notice_image, create_story_image
 from app.services.weekly_image import create_weekly_image
-from app.services.weekly_review import MIN_RECORDED_DAYS, WeekScore, score_week
+from app.services.weekly_review import (
+    WeekScore,
+    is_week_ready,
+    score_week,
+    sunday_missing_meals,
+)
 
 router = APIRouter()
 
@@ -520,20 +525,16 @@ async def story_publish_weekly(
 ):
     """1週間の振り返りをストーリーに自動投稿する（cron用・冪等）。
 
-    日次と同じく状態駆動で、cronは1日に何度呼んでもよい:
-    1. 日曜のJST21時以降なら、終わろうとしている「今週」を投稿
-    2. それ以外は「先週」が未投稿なら投稿（日曜の投稿を取りこぼした場合の救済）
-    記録が MIN_RECORDED_DAYS 日未満の週は、振り返りとして成立しないので投稿しない。
+    投稿するのは「日曜の3食がそろった週」だけ。日曜まで記録が入ったことを
+    週が締まった合図とみなすので、週の途中では投稿されない。cronは1日に
+    何度呼んでもよく、今週・先週の順に見て、締まっていて未投稿の週があれば
+    それを投稿する。（締まっていない週は台帳に残さないので、後から日曜の
+    記録を足せば次のcronで投稿される）
     """
     now = _now_jst()
     today = now.date()
     this_week = _week_start(today)
-    last_week = _week_start(today - timedelta(days=7))
-
-    candidates = []
-    if today.weekday() == 6 and now.hour >= 21:  # 日曜の夜
-        candidates.append(this_week)
-    candidates.append(last_week)
+    candidates = [this_week, _week_start(today - timedelta(days=7))]
 
     user_id = (
         await _get_app_setting(session, "instagram_user_id") or settings.instagram_user_id
@@ -548,7 +549,7 @@ async def story_publish_weekly(
             "detail": "INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN が未設定です",
         }
 
-    too_few: list[dict] = []
+    waiting: list[dict] = []
     for week_start in candidates:
         existing = await session.execute(
             select(WeeklyPostLog.id).where(WeeklyPostLog.week_start == week_start)
@@ -561,12 +562,17 @@ async def story_publish_weekly(
         except DietMcpError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
-        # 画像生成とAI呼び出しの前に、投稿する価値がある週かを先に判断する
-        recorded_days = score_week(week).recorded_days
-        if recorded_days == 0:
-            continue
-        if recorded_days < MIN_RECORDED_DAYS:
-            too_few.append({"week_start": week_start, "recorded_days": recorded_days})
+        # 画像生成とAI呼び出しの前に、週が締まったかを先に判断する
+        if not is_week_ready(week):
+            # 記録が1件も無い週は「待っている」わけではないので報告しない
+            if any(day.get("meals") for day in week.get("daily") or []):
+                waiting.append(
+                    {
+                        "week_start": week_start,
+                        "sunday": week.get("end_date"),
+                        "missing": sunday_missing_meals(week),
+                    }
+                )
             continue
 
         image_bytes, score, comment, _week = await _build_weekly_story(
@@ -605,11 +611,11 @@ async def story_publish_weekly(
             "comment": comment,
         }
 
-    if too_few:
+    if waiting:
         return {
-            "status": "too_few_records",
-            "detail": f"記録が{MIN_RECORDED_DAYS}日未満の週は投稿しません",
-            "skipped": too_few,
+            "status": "waiting_for_sunday",
+            "detail": "日曜の3食がそろうまで投稿を待ちます",
+            "weeks": waiting,
         }
     return {"status": "nothing_to_post", "week_start": this_week}
 
