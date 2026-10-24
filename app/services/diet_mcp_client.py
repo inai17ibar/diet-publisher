@@ -1,8 +1,13 @@
 """diet-mcp（食事記録の本体サービス）からデータを取得するクライアント。"""
 
+import asyncio
+import logging
+
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class DietMcpError(Exception):
@@ -20,14 +25,42 @@ async def _fetch(path: str, date_str: str | None) -> dict:
 
     # Fly.ioはアイドル時に停止しているためコールドスタートを見込んで長めのタイムアウト
     async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            response = await client.get(url, params=params, headers=headers)
-        except httpx.HTTPError as exc:
-            raise DietMcpError(f"diet-mcpに接続できません: {exc}") from exc
+        for attempt in range(3):
+            try:
+                response = await client.get(url, params=params, headers=headers)
+            except httpx.TransportError as exc:
+                if attempt < 2:
+                    logger.warning(
+                        "diet_mcp_retry path=%s attempt=%s error_type=%s",
+                        path,
+                        attempt + 1,
+                        type(exc).__name__,
+                    )
+                    await asyncio.sleep(2**attempt)
+                    continue
+                raise DietMcpError(f"diet-mcp transport failure: {type(exc).__name__}") from exc
 
-    if response.status_code != 200:
-        raise DietMcpError(f"diet-mcpからの取得に失敗: HTTP {response.status_code}")
-    return response.json()
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                logger.warning(
+                    "diet_mcp_retry path=%s attempt=%s upstream_status=%s",
+                    path,
+                    attempt + 1,
+                    response.status_code,
+                )
+                await asyncio.sleep(2**attempt)
+                continue
+            if response.status_code != 200:
+                logger.error(
+                    "diet_mcp_failed path=%s upstream_status=%s", path, response.status_code
+                )
+                raise DietMcpError(f"diet-mcpからの取得に失敗: HTTP {response.status_code}")
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise DietMcpError("diet-mcp returned invalid JSON") from exc
+            if not isinstance(data, dict):
+                raise DietMcpError("diet-mcp returned a non-object summary")
+            return data
 
 
 async def fetch_daily_summary(date_str: str | None = None) -> dict:

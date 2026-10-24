@@ -1,7 +1,10 @@
 import base64
+import logging
 import re
 import secrets
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from time import monotonic
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -50,6 +53,38 @@ from app.services.weekly_review import (
     score_week,
     sunday_missing_meals,
 )
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _weekly_stage(stage: str, week_start: str, request_id: str):
+    """Log only safe metadata: upstream exceptions may contain tokens or meal data."""
+    started = monotonic()
+    try:
+        yield
+    except Exception as exc:
+        logger.error(
+            "weekly_failed request_id=%s week_start=%s stage=%s error_type=%s elapsed_ms=%d",
+            request_id, week_start, stage, type(exc).__name__,
+            int((monotonic() - started) * 1000),
+        )
+        raise HTTPException(
+            status_code=502 if stage in {"fetch_week", "publish"} else 500,
+            detail={
+                "code": "weekly_publish_failed",
+                "stage": stage,
+                "week_start": week_start,
+                "request_id": request_id,
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
+    else:
+        logger.info(
+            "weekly_completed request_id=%s week_start=%s stage=%s elapsed_ms=%d",
+            request_id, week_start, stage, int((monotonic() - started) * 1000),
+        )
+
 
 router = APIRouter()
 
@@ -461,7 +496,8 @@ async def _generate_weekly_comment_safe(
     try:
         previous = await _recent_weekly_comments(session)
         return await generate_weekly_review(week, score, previous)
-    except Exception:
+    except Exception as exc:
+        logger.warning("weekly_comment_fallback error_type=%s", type(exc).__name__)
         return None
 
 
@@ -531,6 +567,7 @@ async def story_publish_weekly(
     それを投稿する。（締まっていない週は台帳に残さないので、後から日曜の
     記録を足せば次のcronで投稿される）
     """
+    request_id = secrets.token_hex(8)
     now = _now_jst()
     today = now.date()
     this_week = _week_start(today)
@@ -557,10 +594,8 @@ async def story_publish_weekly(
         if existing.scalar_one_or_none() is not None:
             continue
 
-        try:
+        with _weekly_stage("fetch_week", week_start, request_id):
             week = await fetch_week_summary(week_start)
-        except DietMcpError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
         # 画像生成とAI呼び出しの前に、週が締まったかを先に判断する
         if not is_week_ready(week):
@@ -575,28 +610,31 @@ async def story_publish_weekly(
                 )
             continue
 
-        image_bytes, score, comment, _week = await _build_weekly_story(
-            session, week_start, week=week
-        )
-
-        filename = f"weekly_{week_start.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
-        (settings.images_dir / filename).write_bytes(image_bytes)
-        image_url = f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
-
-        try:
-            media_id = await publish_story(user_id, token, image_url)
-        except InstagramStoryError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
-
-        session.add(
-            WeeklyPostLog(
-                week_start=week_start,
-                media_id=media_id,
-                score=score.total,
-                comment=comment,
+        with _weekly_stage("build_image", week_start, request_id):
+            image_bytes, score, comment, _week = await _build_weekly_story(
+                session, week_start, week=week
             )
-        )
-        await session.commit()
+
+        with _weekly_stage("save_image", week_start, request_id):
+            filename = f"weekly_{week_start.replace('-', '')}_{secrets.token_urlsafe(12)}.jpg"
+            (settings.images_dir / filename).write_bytes(image_bytes)
+            image_url = (
+                f"{settings.public_base_url.rstrip('/')}/api/v1/public/story/{filename}"
+            )
+
+        with _weekly_stage("publish", week_start, request_id):
+            media_id = await publish_story(user_id, token, image_url)
+
+        with _weekly_stage("record_post", week_start, request_id):
+            session.add(
+                WeeklyPostLog(
+                    week_start=week_start,
+                    media_id=media_id,
+                    score=score.total,
+                    comment=comment,
+                )
+            )
+            await session.commit()
 
         new_token = await refresh_access_token(token)
         if new_token:
