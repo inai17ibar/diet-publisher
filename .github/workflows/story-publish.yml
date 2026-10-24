@@ -17,7 +17,7 @@ jobs:
     steps:
       # RailwayのServerless(スリープ)を有効にしているため、最初の1発は
       # コールドスタートを踏む。起動待ちで落とさないようリトライと長めの
-      # タイムアウトを付ける。両エンドポイントとも冪等なので再送して安全。
+      # タイムアウトを付ける。週次の読み取り再試行はAPI内で行う。
       - name: Post story if there is something to post
         run: |
           curl -sS --fail -X POST \
@@ -26,12 +26,14 @@ jobs:
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish"
           echo
 
+      # 投稿成功後の応答喪失・台帳保存失敗では再送が二重投稿になり得るため、
+      # 週次POST全体は再試行しない。失敗時は安全な段階情報を本文に出す。
       # 週次振り返りも同じcronに相乗りさせる。投稿すべき週かどうかは
       # サーバー側が判断する（日曜の3食がそろった週だけ投稿する）
       - name: Post weekly review if the week is done
         run: |
-          curl -sS --fail -X POST \
-            --max-time 180 --retry 3 --retry-delay 10 --retry-connrefused \
+          curl -sS --fail-with-body -X POST \
+            --max-time 180 \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish-weekly"
           echo
