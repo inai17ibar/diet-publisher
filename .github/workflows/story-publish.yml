@@ -20,7 +20,7 @@ jobs:
       # タイムアウトを付ける。週次の読み取り再試行はAPI内で行う。
       - name: Post story if there is something to post
         run: |
-          curl -sS --fail -X POST \
+          curl -sS --fail-with-body -X POST \
             --max-time 180 --retry 3 --retry-delay 10 --retry-connrefused \
             -H "X-API-Key: ${{ secrets.DIET_PUBLISHER_API_KEY }}" \
             "https://chatgpt-diet-app-production.up.railway.app/api/v1/story/publish"
