@@ -74,3 +74,8 @@ async def fetch_week_summary(date_str: str | None = None) -> dict:
     日別内訳・週合計・目標との比較が入っており、週次振り返り画像の元データになる。
     """
     return await _fetch("/api/summary/week", date_str)
+
+
+async def fetch_health_week_summary(date_str: str | None = None) -> dict:
+    """本人用の歩数・体重・食事集計。SNS生成からは呼び出さない。"""
+    return await _fetch("/api/health/week", date_str)
